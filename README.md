@@ -8,23 +8,6 @@ The MVP uses a two-tap toggle flow:
 - second `ut` invocation (or `ut stop`) stops recording, processes audio with the specified LLM, and pastes the result
 - `ut abort` cancels the active session
 
-## Status
-
-Current implementation covers:
-
-- single-instance toggle behavior with Unix socket IPC
-- in-memory audio capture with `cpal`
-- mono `16 kHz` normalization and optional silence trimming
-- local dictation via OpenAI-compatible LLM server (llama-server, gemini, openai etc.)
-- Sway focused-window detection
-- focus-safe paste behavior using the Wayland clipboard
-
-Current constraints:
-
-- only Sway is supported
-- runtime depends on external tools for paste and notifications
-- build depends on ALSA development headers because `cpal` pulls in `alsa-sys`
-
 ## Getting Started
 
 Install `ut`:
@@ -45,11 +28,6 @@ Add Sway bindings, e.g.:
 ```conf
 bindsym $mod+equal exec ut start
 bindsym --release $mod+equal exec ut stop
-```
-
-Reload Sway:
-```bash
-swaymsg reload
 ```
 
 ## Build Requirements
@@ -92,7 +70,24 @@ sudo apt install sway wl-clipboard wtype libnotify-bin
 cargo build
 ```
 
+The default build enables two features:
+
+- `audio-capture` — microphone capture via `cpal` (requires the ALSA development headers)
+- `ui` — the status overlay, drawn with `wgpu` on a Wayland layer-shell surface
+
+To build without the overlay and its graphics dependencies:
+
+```bash
+cargo build --no-default-features --features audio-capture
+```
+
 If the build fails with an `alsa.pc` or `alsa-sys` error, install the ALSA development package and make sure `pkg-config` can find it.
+
+Optional install without the overlay:
+
+```bash
+cargo install --locked --git https://github.com/dstoc/ut --no-default-features --features audio-capture
+```
 
 ## Model
 
@@ -118,22 +113,6 @@ ut health
 
 `ut` without a subcommand is equivalent to `ut toggle`.
 
-Expected Sway bindings:
-
-```conf
-bindsym $mod+space exec ut
-bindsym $mod+Shift+space exec ut abort
-```
-
-Runtime state lives under `$XDG_RUNTIME_DIR/ut/`:
-
-```text
-control.sock
-lock
-state.json
-current.wav
-```
-
 ## Configuration
 
 Config is loaded from:
@@ -146,8 +125,6 @@ Defaults:
 ```toml
 [recording]
 max_seconds = 29
-sample_rate = 16000
-channels = 1
 trim_silence = true
 trim_padding_ms = 500
 
@@ -161,6 +138,14 @@ method = "clipboard"
 restore_clipboard = true
 restore_delay_ms = 100
 on_focus_changed = "copy"
+
+[status_ui]
+enabled = true
+width = 200
+height = 200
+x = 0.5
+y = 0.8
+fade_out_ms = 350
 ```
 
 Optional model auth:

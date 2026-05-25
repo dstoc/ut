@@ -7,7 +7,6 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use std::env;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -22,27 +21,25 @@ pub struct DictationResponse {
 }
 
 #[async_trait]
-pub trait GemmaClient: Send + Sync {
+pub trait DictationClient: Send + Sync {
     async fn dictate(&self, request: DictationRequest) -> Result<DictationResponse>;
 }
 
 #[derive(Debug, Clone)]
-pub struct HttpGemmaClient {
+pub struct HttpDictationClient {
     endpoint: String,
     model: String,
     timeout: Duration,
-    api_key: Option<String>,
-    api_key_env: Option<String>,
+    model_config: ModelConfig,
 }
 
-impl HttpGemmaClient {
+impl HttpDictationClient {
     pub fn new(config: &ModelConfig) -> Self {
         Self {
             endpoint: chat_completions_endpoint(&config.url),
             model: config.model.clone(),
             timeout: Duration::from_secs(config.timeout_seconds.max(1)),
-            api_key: config.api_key.clone(),
-            api_key_env: config.api_key_env.clone(),
+            model_config: config.clone(),
         }
     }
 
@@ -64,7 +61,7 @@ impl HttpGemmaClient {
         let response = send_http_request(
             &self.endpoint,
             &request_body,
-            self.resolve_api_key(),
+            self.model_config.resolved_api_key(),
             self.timeout,
         )
         .await?;
@@ -72,23 +69,10 @@ impl HttpGemmaClient {
             serde_json::from_slice(&response).context("failed to parse chat completion")?;
         extract_text(&completion).map(|text| DictationResponse { text })
     }
-
-    fn resolve_api_key(&self) -> Option<String> {
-        self.api_key
-            .as_ref()
-            .filter(|value| !value.is_empty())
-            .cloned()
-            .or_else(|| {
-                self.api_key_env
-                    .as_deref()
-                    .and_then(|name| env::var(name).ok())
-                    .filter(|value| !value.is_empty())
-            })
-    }
 }
 
 #[async_trait]
-impl GemmaClient for HttpGemmaClient {
+impl DictationClient for HttpDictationClient {
     async fn dictate(&self, request: DictationRequest) -> Result<DictationResponse> {
         self.dictate_async(request).await
     }
@@ -203,7 +187,7 @@ fn extract_text(response: &ChatCompletionResponse) -> Result<String> {
 
     let text = text.trim().to_string();
     if text.is_empty() {
-        anyhow::bail!("Gemma returned empty dictation text");
+        anyhow::bail!("model returned empty dictation text");
     }
     Ok(text)
 }
@@ -240,7 +224,7 @@ async fn send_http_request(
     if !status.is_success() {
         let text = String::from_utf8_lossy(&bytes);
         anyhow::bail!(
-            "Gemma HTTP request failed with status {}: {text}",
+            "dictation request failed with status {}: {text}",
             status.as_u16()
         );
     }
@@ -284,14 +268,6 @@ mod tests {
     use crate::config::Config;
     use crate::context::AppContext;
     use crate::prompt::build_prompt;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static ENV_KEY_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn unique_env_key(prefix: &str) -> String {
-        let id = ENV_KEY_COUNTER.fetch_add(1, Ordering::Relaxed);
-        format!("UT_{prefix}_{}_{}", std::process::id(), id)
-    }
 
     #[test]
     fn parses_text_content() {
@@ -340,43 +316,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn explicit_api_key_takes_precedence_over_environment_key() {
-        let env_key = unique_env_key("GEMMA_API_KEY");
-        let client = HttpGemmaClient {
-            endpoint: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
-            model: "model".to_string(),
-            timeout: Duration::from_secs(1),
-            api_key: Some("inline-secret".to_string()),
-            api_key_env: Some(env_key.clone()),
-        };
-
-        unsafe {
-            env::set_var(&env_key, "env-secret");
-        }
-        assert_eq!(client.resolve_api_key().as_deref(), Some("inline-secret"));
-        unsafe {
-            env::remove_var(env_key);
-        }
-    }
-
-    #[test]
-    fn api_key_can_be_loaded_from_environment() {
-        let env_key = unique_env_key("GEMMA_API_KEY_ENV");
-        let client = HttpGemmaClient {
-            endpoint: "http://127.0.0.1:11434/v1/chat/completions".to_string(),
-            model: "model".to_string(),
-            timeout: Duration::from_secs(1),
-            api_key: None,
-            api_key_env: Some(env_key.clone()),
-        };
-
-        unsafe {
-            env::set_var(&env_key, "env-secret");
-        }
-        assert_eq!(client.resolve_api_key().as_deref(), Some("env-secret"));
-        unsafe {
-            env::remove_var(env_key);
-        }
-    }
 }

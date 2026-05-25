@@ -1,19 +1,6 @@
 use anyhow::{Context, Result};
 use std::process::{Command, Stdio};
 
-pub trait Notifier: Send + Sync {
-    fn notify(&self, title: &str, body: &str) -> Result<()>;
-}
-
-#[derive(Debug, Default)]
-pub struct NoopNotifier;
-
-impl Notifier for NoopNotifier {
-    fn notify(&self, _title: &str, _body: &str) -> Result<()> {
-        Ok(())
-    }
-}
-
 pub fn notify(title: &str, body: &str) -> Result<()> {
     let status = Command::new("notify-send")
         .arg(title)

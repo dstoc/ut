@@ -6,12 +6,13 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
     pub recording: RecordingConfig,
     pub model: ModelConfig,
     pub paste: PasteConfig,
+    pub status_ui: StatusUiConfig,
     pub prompts: BTreeMap<String, String>,
     pub app_rules: Vec<AppRule>,
 }
@@ -41,17 +42,23 @@ impl Config {
         if self.recording.max_seconds == 0 {
             anyhow::bail!("recording.max_seconds must be greater than 0");
         }
-        if self.recording.sample_rate == 0 {
-            anyhow::bail!("recording.sample_rate must be greater than 0");
-        }
-        if self.recording.channels == 0 {
-            anyhow::bail!("recording.channels must be greater than 0");
-        }
         if self.model.model.trim().is_empty() {
             anyhow::bail!("model.model must not be empty");
         }
         if self.model.timeout_seconds == 0 {
             anyhow::bail!("model.timeout_seconds must be greater than 0");
+        }
+        if self.status_ui.width == 0 {
+            anyhow::bail!("status_ui.width must be greater than 0");
+        }
+        if self.status_ui.height == 0 {
+            anyhow::bail!("status_ui.height must be greater than 0");
+        }
+        if !(0.0..=1.0).contains(&self.status_ui.x) {
+            anyhow::bail!("status_ui.x must be between 0.0 and 1.0");
+        }
+        if !(0.0..=1.0).contains(&self.status_ui.y) {
+            anyhow::bail!("status_ui.y must be between 0.0 and 1.0");
         }
 
         let url = reqwest::Url::parse(&self.model.url)
@@ -94,8 +101,6 @@ pub fn config_path() -> PathBuf {
 #[serde(default)]
 pub struct RecordingConfig {
     pub max_seconds: u32,
-    pub sample_rate: u32,
-    pub channels: u16,
     pub trim_silence: bool,
     pub trim_padding_ms: u32,
 }
@@ -104,8 +109,6 @@ impl Default for RecordingConfig {
     fn default() -> Self {
         Self {
             max_seconds: 29,
-            sample_rate: 16_000,
-            channels: 1,
             trim_silence: true,
             trim_padding_ms: 500,
         }
@@ -169,6 +172,30 @@ impl Default for PasteConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StatusUiConfig {
+    pub enabled: bool,
+    pub width: u32,
+    pub height: u32,
+    pub x: f32,
+    pub y: f32,
+    pub fade_out_ms: u64,
+}
+
+impl Default for StatusUiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            width: 200,
+            height: 200,
+            x: 0.5,
+            y: 0.8,
+            fade_out_ms: 350,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PasteMethod {
@@ -177,6 +204,7 @@ pub enum PasteMethod {
     Wtype,
 }
 
+// Forward-looking single-variant enum: reserved as an extension point for a future "type instead of copy" behavior on focus change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FocusMismatchAction {
@@ -241,12 +269,43 @@ mod tests {
     #[test]
     fn defaults_match_mvp_shape() {
         let config = Config::default();
-        assert_eq!(config.recording.sample_rate, 16_000);
         assert!(config.paste.restore_clipboard);
+        assert!(config.status_ui.enabled);
+        assert_eq!(config.status_ui.width, 200);
+        assert_eq!(config.status_ui.height, 200);
+        assert_eq!(config.status_ui.x, 0.5);
+        assert_eq!(config.status_ui.y, 0.8);
+        assert_eq!(config.status_ui.fade_out_ms, 350);
         assert!(config.prompts.is_empty());
         assert_eq!(config.model.url, "http://127.0.0.1:11434/v1");
         assert_eq!(config.model.api_key, None);
         assert_eq!(config.model.api_key_env, None);
+    }
+
+    #[test]
+    fn parses_status_ui_section_with_defaults_for_other_fields() {
+        let config: Config = toml::from_str(
+            r#"
+                [status_ui]
+                enabled = true
+                width = 320
+                height = 120
+                x = 0.6
+                y = 0.75
+                fade_out_ms = 400
+            "#,
+        )
+        .expect("config should parse");
+
+        assert!(config.status_ui.enabled);
+        assert_eq!(config.status_ui.width, 320);
+        assert_eq!(config.status_ui.height, 120);
+        assert_eq!(config.status_ui.x, 0.6);
+        assert_eq!(config.status_ui.y, 0.75);
+        assert_eq!(config.status_ui.fade_out_ms, 400);
+        assert_eq!(config.recording, RecordingConfig::default());
+        assert_eq!(config.model, ModelConfig::default());
+        assert_eq!(config.paste, PasteConfig::default());
     }
 
     #[test]
@@ -260,6 +319,17 @@ mod tests {
     fn validate_rejects_zero_timeout() {
         let mut config = Config::default();
         config.model.timeout_seconds = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_zero_status_ui_dimensions() {
+        let mut config = Config::default();
+        config.status_ui.width = 0;
+        assert!(config.validate().is_err());
+
+        let mut config = Config::default();
+        config.status_ui.height = 0;
         assert!(config.validate().is_err());
     }
 

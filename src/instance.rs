@@ -11,7 +11,6 @@ pub struct RuntimePaths {
     pub control_socket: PathBuf,
     pub lock: PathBuf,
     pub state_path: PathBuf,
-    pub current_wav: PathBuf,
 }
 
 impl RuntimePaths {
@@ -24,7 +23,6 @@ impl RuntimePaths {
             control_socket: root.join("control.sock"),
             lock: root.join("lock"),
             state_path: root.join("state.json"),
-            current_wav: root.join("current.wav"),
             root,
         })
     }

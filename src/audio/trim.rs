@@ -1,4 +1,4 @@
-use crate::audio::TARGET_SAMPLE_RATE;
+use super::TARGET_SAMPLE_RATE;
 use crate::config::RecordingConfig;
 
 pub fn trim_silence(samples: &[f32], config: &RecordingConfig) -> Vec<f32> {
@@ -99,15 +99,15 @@ mod tests {
     fn trims_leading_and_trailing_silence() {
         let config = RecordingConfig {
             max_seconds: 29,
-            sample_rate: TARGET_SAMPLE_RATE,
-            channels: 1,
             trim_silence: true,
             trim_padding_ms: 100,
         };
 
-        let mut samples = vec![0.0; 1_000];
+        // Silence regions must exceed the padding re-added around speech
+        // (100 ms == 1600 samples at 16 kHz) for trimming to shorten the buffer.
+        let mut samples = vec![0.0; 5_000];
         samples.extend(vec![0.2; 1_000]);
-        samples.extend(vec![0.0; 1_000]);
+        samples.extend(vec![0.0; 5_000]);
 
         let trimmed = trim_silence(&samples, &config);
         assert!(trimmed.len() < samples.len());
@@ -120,8 +120,6 @@ mod tests {
         let padding_samples = sample_rate / 10;
         let config = RecordingConfig {
             max_seconds: 29,
-            sample_rate: TARGET_SAMPLE_RATE,
-            channels: 1,
             trim_silence: true,
             trim_padding_ms: 100,
         };

@@ -56,6 +56,25 @@ impl ControlState {
         }
     }
 
+    fn persist_phase(&self, phase: SessionPhase) {
+        let _ = crate::state::write_session_phase(&self.state_path, Some(self.pid), phase);
+    }
+
+    pub fn transition(&self, phase: SessionPhase) {
+        let mut inner = self.inner.lock().expect("control state poisoned");
+        inner.phase = phase;
+        self.persist_phase(phase);
+    }
+
+    pub fn record_metadata(&self, update: impl FnOnce(&mut crate::state::SessionState)) {
+        let inner = self.inner.lock().expect("control state poisoned");
+        let mut file = crate::state::read_state_or_default(&self.state_path);
+        file.session.pid = Some(self.pid);
+        file.session.phase = inner.phase;
+        update(&mut file.session);
+        let _ = crate::state::write_state(&self.state_path, &file);
+    }
+
     pub fn phase(&self) -> SessionPhase {
         self.inner.lock().expect("control state poisoned").phase
     }
@@ -65,8 +84,7 @@ impl ControlState {
         if !inner.abort_requested {
             inner.phase = SessionPhase::Processing;
             inner.stop_requested = true;
-            let _ =
-                crate::state::write_session_phase(&self.state_path, Some(self.pid), inner.phase);
+            self.persist_phase(inner.phase);
         }
         self.wake.notify_all();
     }
@@ -76,7 +94,7 @@ impl ControlState {
         inner.abort_requested = true;
         inner.stop_requested = false;
         inner.phase = SessionPhase::Idle;
-        let _ = crate::state::write_session_phase(&self.state_path, Some(self.pid), inner.phase);
+        self.persist_phase(inner.phase);
         self.wake.notify_all();
     }
 

@@ -2,20 +2,44 @@ use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    mpsc::SyncSender,
+    mpsc::{sync_channel, Receiver, SyncSender},
     Arc, Mutex,
 };
+use std::thread::JoinHandle;
 
 use super::dsp;
 use super::{
     clamp_sample, AudioPayload, AudioVisualizationSnapshot, TARGET_CHANNELS, TARGET_SAMPLE_RATE,
 };
 
+/// How many downmixed buffers may queue for the visualization worker before
+/// the audio callback starts dropping them. Visualization is best-effort, so a
+/// slow worker must never stall or unbound-allocate on the realtime thread.
+const VISUALIZATION_QUEUE_DEPTH: usize = 8;
+
+/// Target ALSA period length. A larger period gives the capture ring more
+/// headroom to absorb scheduling jitter (UI rendering, the transcription
+/// request, general load) before it overruns and ALSA reports POLLERR/xrun.
+const TARGET_BUFFER_MILLIS: u32 = 200;
+
+/// Up-front capacity for the capture buffer, so it doesn't reallocate (copying
+/// the whole growing buffer) on the realtime audio thread mid-recording.
+const CAPTURE_RESERVE_SECONDS: usize = 60;
+
+/// A downmixed capture buffer handed from the realtime audio callback to the
+/// visualization worker thread, where the (expensive) DSP actually runs.
+struct VisualizationFrame {
+    mono_frames: Vec<f32>,
+    sample_rate: u32,
+    frame_index: u64,
+}
+
 pub struct Recorder {
     stream: cpal::Stream,
     captured: Arc<Mutex<Vec<f32>>>,
     input_sample_rate: u32,
     input_channels: u16,
+    visualization_worker: Option<JoinHandle<()>>,
 }
 
 impl Recorder {
@@ -28,24 +52,45 @@ impl Recorder {
     ) -> Result<Self> {
         let host = cpal::default_host();
         let (device, supported) = select_input_device(&host)?;
-        let stream_config: cpal::StreamConfig = supported.clone().into();
+        let mut stream_config: cpal::StreamConfig = supported.clone().into();
         let input_sample_rate: u32 = stream_config.sample_rate;
         let input_channels: u16 = stream_config.channels;
-        let captured = Arc::new(Mutex::new(Vec::new()));
+
+        // Ask for a larger period than the device default when the device
+        // advertises a usable range, clamped to what it actually supports.
+        if let cpal::SupportedBufferSize::Range { min, max } = supported.buffer_size() {
+            let target = (input_sample_rate / 1000 * TARGET_BUFFER_MILLIS).clamp(*min, *max);
+            stream_config.buffer_size = cpal::BufferSize::Fixed(target);
+        }
+
+        let reserve =
+            input_sample_rate as usize * usize::from(input_channels.max(1)) * CAPTURE_RESERVE_SECONDS;
+        let captured = Arc::new(Mutex::new(Vec::with_capacity(reserve)));
         let frame_counter = Arc::new(AtomicU64::new(0));
         let err_fn = |err| eprintln!("cpal input error: {err}");
+
+        // When a sink is connected, offload the visualization DSP to a worker
+        // thread. The realtime audio callback only downmixes and hands the
+        // buffer off over a bounded channel; it never runs the DSP itself.
+        let (visualization_tx, visualization_worker) = match visualization_sink {
+            Some(sink) => {
+                let (tx, rx) = sync_channel::<VisualizationFrame>(VISUALIZATION_QUEUE_DEPTH);
+                (Some(tx), Some(spawn_visualization_worker(rx, sink)))
+            }
+            None => (None, None),
+        };
 
         let stream = match supported.sample_format() {
             cpal::SampleFormat::F32 => {
                 let captured = Arc::clone(&captured);
                 let frame_counter = Arc::clone(&frame_counter);
-                let visualization_sink = visualization_sink.clone();
+                let visualization_tx = visualization_tx.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[f32], _| {
-                        push_samples_with_visualization(
+                        push_samples(
                             &captured,
-                            visualization_sink.as_ref(),
+                            visualization_tx.as_ref(),
                             &frame_counter,
                             input_sample_rate,
                             input_channels,
@@ -60,13 +105,13 @@ impl Recorder {
             cpal::SampleFormat::I16 => {
                 let captured = Arc::clone(&captured);
                 let frame_counter = Arc::clone(&frame_counter);
-                let visualization_sink = visualization_sink.clone();
+                let visualization_tx = visualization_tx.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[i16], _| {
-                        push_samples_with_visualization(
+                        push_samples(
                             &captured,
-                            visualization_sink.as_ref(),
+                            visualization_tx.as_ref(),
                             &frame_counter,
                             input_sample_rate,
                             input_channels,
@@ -81,13 +126,13 @@ impl Recorder {
             cpal::SampleFormat::U16 => {
                 let captured = Arc::clone(&captured);
                 let frame_counter = Arc::clone(&frame_counter);
-                let visualization_sink = visualization_sink.clone();
+                let visualization_tx = visualization_tx.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[u16], _| {
-                        push_samples_with_visualization(
+                        push_samples(
                             &captured,
-                            visualization_sink.as_ref(),
+                            visualization_tx.as_ref(),
                             &frame_counter,
                             input_sample_rate,
                             input_channels,
@@ -111,6 +156,7 @@ impl Recorder {
             captured,
             input_sample_rate,
             input_channels,
+            visualization_worker,
         })
     }
 
@@ -120,8 +166,14 @@ impl Recorder {
             captured,
             input_sample_rate,
             input_channels,
+            visualization_worker,
         } = self;
+        // Dropping the stream drops the capture callback and with it the last
+        // visualization sender, so the worker's channel closes and it exits.
         drop(stream);
+        if let Some(worker) = visualization_worker {
+            let _ = worker.join();
+        }
 
         let raw = match Arc::try_unwrap(captured) {
             Ok(mutex) => mutex.into_inner().unwrap_or_default(),
@@ -178,9 +230,13 @@ fn u16_to_f32(sample: &u16) -> f32 {
     ((*sample as f32) - 32768.0) / 32768.0
 }
 
-fn push_samples_with_visualization<T, F>(
+/// Realtime audio callback body: copy every captured sample into `captured`
+/// (the recording) and, when a visualization worker is connected, hand it the
+/// downmixed buffer. This stays cheap and bounded — no DSP, no blocking — so it
+/// reliably meets the audio device's callback deadline.
+fn push_samples<T, F>(
     captured: &Arc<Mutex<Vec<f32>>>,
-    visualization_sink: Option<&SyncSender<AudioVisualizationSnapshot>>,
+    visualization_tx: Option<&SyncSender<VisualizationFrame>>,
     frame_counter: &Arc<AtomicU64>,
     input_sample_rate: u32,
     input_channels: u16,
@@ -199,7 +255,12 @@ fn push_samples_with_visualization<T, F>(
         return;
     }
 
-    let mut mono_frames = Vec::with_capacity(frame_count);
+    // Only build the mono buffer when a worker will actually consume it.
+    let mut mono_frames = if visualization_tx.is_some() {
+        Vec::with_capacity(frame_count)
+    } else {
+        Vec::new()
+    };
 
     if let Ok(mut buffer) = captured.lock() {
         for frame in data.chunks_exact(channels) {
@@ -209,27 +270,48 @@ fn push_samples_with_visualization<T, F>(
                 buffer.push(sample);
                 sum += sample;
             }
-            mono_frames.push(clamp_sample(sum / channels as f32));
+            if visualization_tx.is_some() {
+                mono_frames.push(clamp_sample(sum / channels as f32));
+            }
         }
     } else {
         return;
     }
 
-    // No visualization sink (e.g. UI disabled) means nobody consumes a
-    // snapshot, so skip the per-callback DSP entirely. Building it anyway runs
-    // the full Goertzel band analysis on the realtime audio thread and can blow
-    // the callback deadline on slower machines, causing capture under/overruns.
-    let Some(sink) = visualization_sink else {
+    let Some(tx) = visualization_tx else {
         return;
     };
 
     let frame_index =
         frame_counter.fetch_add(frame_count as u64, Ordering::Relaxed) + frame_count as u64;
-    if let Some(snapshot) =
-        dsp::build_visualization_snapshot(&mono_frames, input_sample_rate, frame_index)
-    {
-        let _ = try_publish_visualization_snapshot(Some(sink), snapshot);
-    }
+    // Best-effort: if the worker is behind and the queue is full, drop this
+    // frame rather than block the realtime thread.
+    let _ = tx.try_send(VisualizationFrame {
+        mono_frames,
+        sample_rate: input_sample_rate,
+        frame_index,
+    });
+}
+
+/// Off-thread visualization DSP: receives downmixed buffers from the audio
+/// callback, runs the band analysis, and forwards snapshots to the UI sink.
+/// Exits when the channel closes (the recorder's stream, and thus the sender,
+/// is dropped).
+fn spawn_visualization_worker(
+    frames: Receiver<VisualizationFrame>,
+    sink: SyncSender<AudioVisualizationSnapshot>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        while let Ok(frame) = frames.recv() {
+            if let Some(snapshot) = dsp::build_visualization_snapshot(
+                &frame.mono_frames,
+                frame.sample_rate,
+                frame.frame_index,
+            ) {
+                let _ = try_publish_visualization_snapshot(Some(&sink), snapshot);
+            }
+        }
+    })
 }
 
 fn try_publish_visualization_snapshot(

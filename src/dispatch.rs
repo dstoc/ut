@@ -10,31 +10,28 @@ use std::sync::Arc;
 pub fn run(invocation: Invocation) -> Result<()> {
     let config = config::Config::load()?;
 
+    if let Invocation::Health = invocation {
+        return crate::health::run_health_checks(&config);
+    }
+
+    let runtime = instance::RuntimePaths::resolve()?;
+    let pid = std::process::id();
     match invocation {
-        Invocation::Health => crate::health::run_health_checks(&config),
-        _ => {
-            let runtime = instance::RuntimePaths::resolve()?;
-            let pid = std::process::id();
-            match invocation {
-                Invocation::Start => start_invocation(runtime, pid, config),
-                Invocation::Stop => {
-                    dispatch_or_bootstrap(&runtime, ipc::ControlCommand::StopAndProcess).map(|_| ())
+        Invocation::Start { save_to } => start_invocation(runtime, pid, config, save_to),
+        Invocation::Stop => {
+            dispatch_or_bootstrap(&runtime, ipc::ControlCommand::StopAndProcess).map(|_| ())
+        }
+        Invocation::Status => print_status(&runtime),
+        Invocation::Abort => dispatch_or_bootstrap(&runtime, ipc::ControlCommand::Abort).map(|_| ()),
+        Invocation::Toggle => {
+            match dispatch_or_bootstrap(&runtime, ipc::ControlCommand::StopAndProcess)? {
+                DispatchOutcome::Delivered => Ok(()),
+                DispatchOutcome::LiveOwnerMissing => {
+                    start_owner_session(runtime, pid, config, None)
                 }
-                Invocation::Status => print_status(&runtime),
-                Invocation::Abort => {
-                    dispatch_or_bootstrap(&runtime, ipc::ControlCommand::Abort).map(|_| ())
-                }
-                Invocation::Toggle => {
-                    match dispatch_or_bootstrap(&runtime, ipc::ControlCommand::StopAndProcess)? {
-                        DispatchOutcome::Delivered => Ok(()),
-                        DispatchOutcome::LiveOwnerMissing => {
-                            start_owner_session(runtime, pid, config)
-                        }
-                    }
-                }
-                Invocation::Health => unreachable!(),
             }
         }
+        Invocation::Health => unreachable!(),
     }
 }
 
@@ -42,6 +39,7 @@ fn start_invocation(
     runtime: instance::RuntimePaths,
     pid: u32,
     config: config::Config,
+    save_to: Option<std::path::PathBuf>,
 ) -> Result<()> {
     match ipc::send_command(&runtime.control_socket, ipc::ControlCommand::Status) {
         Ok(ipc::ControlResponse::Status(phase)) => {
@@ -61,7 +59,7 @@ fn start_invocation(
             }
             instance::clean_stale_runtime(&runtime)?;
             state::clear_session(&runtime.state_path)?;
-            start_owner_session(runtime, pid, config)
+            start_owner_session(runtime, pid, config, save_to)
         }
     }
 }
@@ -152,6 +150,7 @@ fn start_owner_session(
     runtime: instance::RuntimePaths,
     pid: u32,
     config: config::Config,
+    save_to: Option<std::path::PathBuf>,
 ) -> Result<()> {
     match instance::acquire_lock(&runtime, pid)? {
         instance::LockOutcome::Busy(owner_pid) => {
@@ -188,7 +187,7 @@ fn start_owner_session(
     ));
     let server = ipc::spawn_control_server(socket, Arc::clone(&control));
 
-    let session = session::Session::new(&config, Arc::clone(&control), initial_context);
+    let session = session::Session::new(&config, Arc::clone(&control), initial_context, save_to);
     let session_result = session.run();
     if session_result.is_err() {
         let _ =

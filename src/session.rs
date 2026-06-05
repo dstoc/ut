@@ -9,11 +9,12 @@ use crate::overlay_session::OverlaySession;
 use crate::paste;
 use crate::prompt;
 use crate::state::SessionPhase;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Builder;
 use tokio::sync::oneshot;
 
@@ -114,11 +115,59 @@ pub(crate) fn capture_context() -> context::AppContext {
     }
 }
 
+/// Write the recorded audio to `dir` as a timestamped WAV, returning the path.
+/// Used by `ut start --save-to <dir>` for debugging what the model actually
+/// received. Creates the directory if needed.
+fn save_debug_audio(dir: &Path, payload: &audio::AudioPayload) -> Result<PathBuf> {
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("failed to create debug audio directory {}", dir.display()))?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    let path = dir.join(format!("{}.wav", format_utc_timestamp(now)));
+
+    let bytes = audio::encode_wav_bytes(&payload.samples, payload.sample_rate);
+    std::fs::write(&path, bytes)
+        .with_context(|| format!("failed to write debug audio {}", path.display()))?;
+    Ok(path)
+}
+
+/// Format a Unix timestamp (seconds) as `YYYY-MM-DD_HH-MM-SS` in UTC, suitable
+/// for use as a filename. Dependency-free so it works without a date crate.
+fn format_utc_timestamp(unix_seconds: u64) -> String {
+    let days = (unix_seconds / 86_400) as i64;
+    let seconds_of_day = unix_seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}_{hour:02}-{minute:02}-{second:02}")
+}
+
+/// Convert a count of days since the Unix epoch to a `(year, month, day)` civil
+/// date (UTC). Howard Hinnant's `civil_from_days` algorithm.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let year = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let year = if month <= 2 { year + 1 } else { year };
+    (year, month, day)
+}
+
 pub struct Session<'a> {
     config: &'a Config,
     control: Arc<ControlState>,
     overlay: OverlaySession,
     start_context: context::AppContext,
+    save_to: Option<PathBuf>,
 }
 
 impl<'a> Session<'a> {
@@ -126,6 +175,7 @@ impl<'a> Session<'a> {
         config: &'a Config,
         control: Arc<ControlState>,
         start_context: context::AppContext,
+        save_to: Option<PathBuf>,
     ) -> Self {
         let overlay = OverlaySession::start(&config.status_ui);
         Self {
@@ -133,6 +183,7 @@ impl<'a> Session<'a> {
             control,
             overlay,
             start_context,
+            save_to,
         }
     }
 
@@ -170,6 +221,13 @@ impl<'a> Session<'a> {
             self.overlay.finish_with_fade();
             self.control.transition(SessionPhase::Idle);
             return Ok(());
+        }
+
+        if let Some(dir) = &self.save_to {
+            match save_debug_audio(dir, &payload) {
+                Ok(path) => eprintln!("saved debug audio to {}", path.display()),
+                Err(err) => eprintln!("warning: failed to save debug audio: {err:#}"),
+            }
         }
 
         if self.control.has_abort_request() {
@@ -256,6 +314,27 @@ mod tests {
     use anyhow::Result;
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn formats_utc_timestamp_for_filename() {
+        // 0 == 1970-01-01T00:00:00Z
+        assert_eq!(format_utc_timestamp(0), "1970-01-01_00-00-00");
+        // 1_700_000_000 == 2023-11-14T22:13:20Z
+        assert_eq!(format_utc_timestamp(1_700_000_000), "2023-11-14_22-13-20");
+    }
+
+    #[test]
+    fn saves_debug_audio_with_wav_header() {
+        let dir = std::env::temp_dir().join(format!("ut-save-test-{}", std::process::id()));
+        let payload = audio::AudioPayload::new(16_000, 1, vec![0.0, 0.5, -0.5]);
+
+        let path = save_debug_audio(&dir, &payload).expect("save");
+        assert!(path.extension().is_some_and(|ext| ext == "wav"));
+        let bytes = std::fs::read(&path).expect("read back");
+        assert_eq!(&bytes[..4], b"RIFF");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn auto_paste_requires_matching_container_ids() {

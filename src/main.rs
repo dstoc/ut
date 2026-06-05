@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(name = "ut", about = "Dictation control for Sway/Wayland")]
@@ -8,9 +9,13 @@ struct Cli {
     command: Option<Command>,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 enum Command {
-    Start,
+    Start {
+        /// Save the recorded audio as a timestamped WAV in this directory (for debugging).
+        #[arg(long, value_name = "DIR")]
+        save_to: Option<PathBuf>,
+    },
     Stop,
     Abort,
     Toggle,
@@ -21,7 +26,7 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let invocation = match cli.command {
-        Some(Command::Start) => ut::Invocation::Start,
+        Some(Command::Start { save_to }) => ut::Invocation::Start { save_to },
         Some(Command::Stop) => ut::Invocation::Stop,
         Some(Command::Abort) => ut::Invocation::Abort,
         Some(Command::Toggle) | None => ut::Invocation::Toggle,
@@ -46,7 +51,21 @@ mod tests {
     #[test]
     fn parses_start_subcommand() {
         let cli = Cli::parse_from(["ut", "start"]);
-        assert!(matches!(cli.command, Some(Command::Start)));
+        assert!(matches!(
+            cli.command,
+            Some(Command::Start { save_to: None })
+        ));
+    }
+
+    #[test]
+    fn parses_start_save_to_flag() {
+        let cli = Cli::parse_from(["ut", "start", "--save-to", "/tmp/ut-audio"]);
+        match cli.command {
+            Some(Command::Start { save_to: Some(dir) }) => {
+                assert_eq!(dir, PathBuf::from("/tmp/ut-audio"));
+            }
+            other => panic!("expected start with save_to, got {other:?}"),
+        }
     }
 
     #[test]

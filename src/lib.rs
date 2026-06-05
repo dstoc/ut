@@ -16,10 +16,14 @@ pub mod session;
 pub mod state;
 
 use anyhow::Result;
+use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Invocation {
-    Start,
+    Start {
+        /// Optional directory to save the recorded audio (WAV) for debugging.
+        save_to: Option<PathBuf>,
+    },
     Stop,
     Toggle,
     Abort,

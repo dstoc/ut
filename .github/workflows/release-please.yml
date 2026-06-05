@@ -55,7 +55,7 @@ jobs:
           staging="${bin}-${{ needs.release-please.outputs.tag_name }}-${TARGET}"
           mkdir "$staging"
           cp "target/${TARGET}/release/${bin}" "$staging/"
-          cp README.md "$staging/"
+          cp README.md LICENSE "$staging/"
           tar czf "$staging.tar.gz" "$staging"
           echo "ASSET=$staging.tar.gz" >> "$GITHUB_ENV"
       - name: Upload to release

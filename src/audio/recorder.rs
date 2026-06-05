@@ -29,8 +29,8 @@ impl Recorder {
         let host = cpal::default_host();
         let (device, supported) = select_input_device(&host)?;
         let stream_config: cpal::StreamConfig = supported.clone().into();
-        let input_sample_rate: u32 = stream_config.sample_rate.into();
-        let input_channels: u16 = stream_config.channels.into();
+        let input_sample_rate: u32 = stream_config.sample_rate;
+        let input_channels: u16 = stream_config.channels;
         let captured = Arc::new(Mutex::new(Vec::new()));
         let frame_counter = Arc::new(AtomicU64::new(0));
         let err_fn = |err| eprintln!("cpal input error: {err}");

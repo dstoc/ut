@@ -49,25 +49,31 @@ mod tests {
             paste_keys: None,
         }];
 
-        let mut context = AppContext::default();
-        context.app_id = Some("kitty".to_string());
+        let context = AppContext {
+            app_id: Some("kitty".to_string()),
+            ..Default::default()
+        };
 
         assert_eq!(build_prompt(&context, &config), "terminal prompt");
     }
 
     #[test]
     fn missing_named_prompt_falls_back_to_builtin_text() {
-        let mut config = Config::default();
-        config.app_rules = vec![AppRule {
-            app_id: Some("kitty".to_string()),
-            class: None,
-            title_contains: None,
-            prompt: Some("terminal".to_string()),
-            paste_keys: None,
-        }];
+        let config = Config {
+            app_rules: vec![AppRule {
+                app_id: Some("kitty".to_string()),
+                class: None,
+                title_contains: None,
+                prompt: Some("terminal".to_string()),
+                paste_keys: None,
+            }],
+            ..Default::default()
+        };
 
-        let mut context = AppContext::default();
-        context.app_id = Some("kitty".to_string());
+        let context = AppContext {
+            app_id: Some("kitty".to_string()),
+            ..Default::default()
+        };
 
         let prompt = build_prompt(&context, &config);
         assert!(prompt.contains("You are a dictation engine."));

@@ -37,7 +37,7 @@ impl AudioPayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AudioVisualizationSnapshot {
     pub frame_index: u64,
     pub sample_rate: u32,

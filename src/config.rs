@@ -26,7 +26,7 @@ impl Config {
 
         let text = fs::read_to_string(&path)
             .with_context(|| format!("failed to read config at {path:?}"))?;
-        Ok(toml::from_str(&text).with_context(|| format!("failed to parse config at {path:?}"))?)
+        toml::from_str(&text).with_context(|| format!("failed to parse config at {path:?}"))
     }
 
     pub fn prompt_name_for_context(&self, context: &AppContext) -> Option<&str> {
@@ -335,14 +335,16 @@ mod tests {
 
     #[test]
     fn validate_rejects_missing_app_rule_prompt_reference() {
-        let mut config = Config::default();
-        config.app_rules = vec![AppRule {
-            app_id: Some("kitty".to_string()),
-            class: None,
-            title_contains: None,
-            prompt: Some("terminal".to_string()),
-            paste_keys: None,
-        }];
+        let config = Config {
+            app_rules: vec![AppRule {
+                app_id: Some("kitty".to_string()),
+                class: None,
+                title_contains: None,
+                prompt: Some("terminal".to_string()),
+                paste_keys: None,
+            }],
+            ..Default::default()
+        };
 
         assert!(config.validate().is_err());
     }
@@ -366,14 +368,16 @@ mod tests {
 
     #[test]
     fn validate_allows_builtin_default_prompt_reference() {
-        let mut config = Config::default();
-        config.app_rules = vec![AppRule {
-            app_id: Some("kitty".to_string()),
-            class: None,
-            title_contains: None,
-            prompt: Some("default".to_string()),
-            paste_keys: None,
-        }];
+        let config = Config {
+            app_rules: vec![AppRule {
+                app_id: Some("kitty".to_string()),
+                class: None,
+                title_contains: None,
+                prompt: Some("default".to_string()),
+                paste_keys: None,
+            }],
+            ..Default::default()
+        };
 
         assert!(config.validate().is_ok());
     }
@@ -426,27 +430,31 @@ mod tests {
 
     #[test]
     fn app_rules_pick_the_first_matching_prompt_name() {
-        let mut config = Config::default();
-        config.app_rules = vec![
-            AppRule {
-                app_id: Some("kitty".to_string()),
-                class: None,
-                title_contains: None,
-                prompt: Some("terminal".to_string()),
-                paste_keys: Some("ctrl+shift+v".to_string()),
-            },
-            AppRule {
-                app_id: None,
-                class: Some("code".to_string()),
-                title_contains: None,
-                prompt: Some("code".to_string()),
-                paste_keys: None,
-            },
-        ];
+        let config = Config {
+            app_rules: vec![
+                AppRule {
+                    app_id: Some("kitty".to_string()),
+                    class: None,
+                    title_contains: None,
+                    prompt: Some("terminal".to_string()),
+                    paste_keys: Some("ctrl+shift+v".to_string()),
+                },
+                AppRule {
+                    app_id: None,
+                    class: Some("code".to_string()),
+                    title_contains: None,
+                    prompt: Some("code".to_string()),
+                    paste_keys: None,
+                },
+            ],
+            ..Default::default()
+        };
 
-        let mut context = AppContext::default();
-        context.app_id = Some("kitty".to_string());
-        context.class = Some("code".to_string());
+        let context = AppContext {
+            app_id: Some("kitty".to_string()),
+            class: Some("code".to_string()),
+            ..Default::default()
+        };
 
         assert_eq!(config.prompt_name_for_context(&context), Some("terminal"));
         assert_eq!(
@@ -472,8 +480,10 @@ mod tests {
             prompt: Some("chat".to_string()),
             paste_keys: None,
         };
-        let mut context = AppContext::default();
-        context.title = Some("Open ChatGPT - Firefox".to_string());
+        let context = AppContext {
+            title: Some("Open ChatGPT - Firefox".to_string()),
+            ..Default::default()
+        };
 
         assert!(rule.matches(&context));
     }

@@ -27,7 +27,7 @@ use wayland_client::{
 mod renderer;
 mod wayland;
 
-use renderer::Renderer;
+use renderer::{FrameParams, Renderer};
 
 const COMMAND_THREAD_NAME: &str = "ut-status-ui";
 const DEFAULT_TICK_MS: u64 = 16;
@@ -305,15 +305,15 @@ impl OverlayApp {
             }
 
             if !self.first_configure {
-                self.graphics.render(
-                    self.shader_phase_value(now),
-                    self.displayed_audio.as_ref(),
-                    self.fade_alpha(now),
-                    self.fbm_phase,
-                    self.fbm_rotation_phase,
-                    self.fbm_translation_phase,
-                    now.saturating_duration_since(self.started_at),
-                )?;
+                self.graphics.render(FrameParams {
+                    phase_value: self.shader_phase_value(now),
+                    audio: self.displayed_audio.as_ref(),
+                    fade_alpha: self.fade_alpha(now),
+                    fbm_phase: self.fbm_phase,
+                    fbm_rotation_phase: self.fbm_rotation_phase,
+                    fbm_translation_phase: self.fbm_translation_phase,
+                    elapsed: now.saturating_duration_since(self.started_at),
+                })?;
             }
 
             conn.flush().context("failed to flush Wayland connection")?;

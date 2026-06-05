@@ -149,9 +149,9 @@ impl OverlayRuntime {
     fn finish_immediately(&mut self) {
         self.visualization_sender.take();
         self.join_snapshot_thread();
-        self.take_handle().map(|handle| {
+        if let Some(handle) = self.take_handle() {
             let _ = handle.shutdown();
-        });
+        }
     }
 
     fn join_snapshot_thread(&mut self) {

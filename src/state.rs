@@ -57,10 +57,7 @@ pub fn read_state(path: impl AsRef<Path>) -> Result<StateFile> {
     let path = path.as_ref();
     let text =
         fs::read_to_string(path).with_context(|| format!("failed to read state at {path:?}"))?;
-    Ok(
-        serde_json::from_str(&text)
-            .with_context(|| format!("failed to parse state at {path:?}"))?,
-    )
+    serde_json::from_str(&text).with_context(|| format!("failed to parse state at {path:?}"))
 }
 
 pub fn write_state(path: impl AsRef<Path>, state: &StateFile) -> Result<()> {

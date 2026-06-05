@@ -146,6 +146,10 @@ impl<'a> Session<'a> {
         );
 
         if self.control.has_abort_request() || matches!(stop_reason, RecordingStopReason::Aborted) {
+            // Stop capture before aborting: the real recorder owns a `cpal::Stream`
+            // whose `Drop` halts the audio device. The stub recorder holds no such
+            // resource, so the drop is a no-op there (hence the lint allow).
+            #[allow(clippy::drop_non_drop)]
             drop(recorder);
             return self.abort_to_idle();
         }
@@ -255,14 +259,17 @@ mod tests {
 
     #[test]
     fn auto_paste_requires_matching_container_ids() {
-        let mut start_context = context::AppContext::default();
-        start_context.container_id = Some("123".to_string());
+        let start_context = context::AppContext {
+            container_id: Some("123".to_string()),
+            ..Default::default()
+        };
 
-        let mut matching_pre_paste_context = context::AppContext::default();
-        matching_pre_paste_context.container_id = Some("123".to_string());
+        let matching_pre_paste_context = context::AppContext {
+            container_id: Some("123".to_string()),
+            ..Default::default()
+        };
 
-        let mut missing_pre_paste_context = context::AppContext::default();
-        missing_pre_paste_context.container_id = None;
+        let missing_pre_paste_context = context::AppContext::default();
 
         assert!(can_auto_paste(&start_context, &matching_pre_paste_context));
         assert!(!can_auto_paste(&start_context, &missing_pre_paste_context));

@@ -1,5 +1,4 @@
 use crate::audio::AudioVisualizationSnapshot;
-use crate::audio::{VISUALIZATION_BAND_COUNT, VISUALIZATION_BIN_COUNT};
 use anyhow::{anyhow, Context, Result};
 use std::ptr::NonNull;
 use std::time::Duration;
@@ -8,6 +7,19 @@ use raw_window_handle::{
 };
 use smithay_client_toolkit::shell::{wlr_layer::LayerSurface, WaylandSurface};
 use wayland_client::{Connection, Proxy};
+
+/// Per-frame inputs the shader needs to render the status overlay. Grouped into
+/// a struct so `render`/`write_uniforms` stay under clippy's argument limit and
+/// share one source of truth for the field set.
+pub(crate) struct FrameParams<'a> {
+    pub(crate) phase_value: f32,
+    pub(crate) audio: Option<&'a AudioVisualizationSnapshot>,
+    pub(crate) fade_alpha: f32,
+    pub(crate) fbm_phase: f32,
+    pub(crate) fbm_rotation_phase: f32,
+    pub(crate) fbm_translation_phase: f32,
+    pub(crate) elapsed: Duration,
+}
 
 #[derive(Debug)]
 pub(crate) struct Renderer {
@@ -185,7 +197,15 @@ impl Renderer {
             uniform_bind_group,
         };
 
-        state.write_uniforms(0.0, None, 0.0, 0.0, 0.0, 0.0, Duration::ZERO);
+        state.write_uniforms(&FrameParams {
+            phase_value: 0.0,
+            audio: None,
+            fade_alpha: 0.0,
+            fbm_phase: 0.0,
+            fbm_rotation_phase: 0.0,
+            fbm_translation_phase: 0.0,
+            elapsed: Duration::ZERO,
+        });
 
         Ok(state)
     }
@@ -200,25 +220,8 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    pub(crate) fn render(
-        &mut self,
-        phase_value: f32,
-        audio: Option<&AudioVisualizationSnapshot>,
-        fade_alpha: f32,
-        fbm_phase: f32,
-        fbm_rotation_phase: f32,
-        fbm_translation_phase: f32,
-        elapsed: Duration,
-    ) -> Result<()> {
-        self.write_uniforms(
-            phase_value,
-            audio,
-            fade_alpha,
-            fbm_phase,
-            fbm_rotation_phase,
-            fbm_translation_phase,
-            elapsed,
-        );
+    pub(crate) fn render(&mut self, params: FrameParams) -> Result<()> {
+        self.write_uniforms(&params);
 
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(output)
@@ -276,34 +279,23 @@ impl Renderer {
         Ok(())
     }
 
-    pub(crate) fn write_uniforms(
-        &self,
-        phase_value: f32,
-        audio: Option<&AudioVisualizationSnapshot>,
-        fade_alpha: f32,
-        fbm_phase: f32,
-        fbm_rotation_phase: f32,
-        fbm_translation_phase: f32,
-        elapsed: Duration,
-    ) {
-        let snapshot = audio
-            .cloned()
-            .unwrap_or_else(|| AudioVisualizationSnapshot {
-                frame_index: 0,
-                sample_rate: 0,
-                rms: 0.0,
-                peak: 0.0,
-                level: 0.0,
-                transient: 0.0,
-                bands: [0.0; VISUALIZATION_BAND_COUNT],
-                waveform: [0.0; VISUALIZATION_BIN_COUNT],
-            });
+    pub(crate) fn write_uniforms(&self, params: &FrameParams) {
+        let FrameParams {
+            phase_value,
+            audio,
+            fade_alpha,
+            fbm_phase,
+            fbm_rotation_phase,
+            fbm_translation_phase,
+            elapsed,
+        } = params;
+        let snapshot = audio.cloned().unwrap_or_default();
 
         let mut bytes = Vec::with_capacity(UNIFORM_BUFFER_SIZE);
         push_f32(&mut bytes, elapsed.as_secs_f32());
-        push_f32(&mut bytes, phase_value);
+        push_f32(&mut bytes, *phase_value);
         push_f32(&mut bytes, fade_alpha.clamp(0.0, 1.0));
-        push_f32(&mut bytes, fbm_phase);
+        push_f32(&mut bytes, *fbm_phase);
 
         push_f32(&mut bytes, snapshot.rms);
         push_f32(&mut bytes, snapshot.peak);
@@ -313,8 +305,8 @@ impl Renderer {
         push_vec4(
             &mut bytes,
             [
-                fbm_rotation_phase,
-                fbm_translation_phase,
+                *fbm_rotation_phase,
+                *fbm_translation_phase,
                 self.center_x,
                 self.center_y,
             ],

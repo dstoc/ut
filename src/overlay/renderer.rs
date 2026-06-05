@@ -1,11 +1,11 @@
 use crate::audio::AudioVisualizationSnapshot;
 use anyhow::{anyhow, Context, Result};
-use std::ptr::NonNull;
-use std::time::Duration;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
 use smithay_client_toolkit::shell::{wlr_layer::LayerSurface, WaylandSurface};
+use std::ptr::NonNull;
+use std::time::Duration;
 use wayland_client::{Connection, Proxy};
 
 /// Per-frame inputs the shader needs to render the status overlay. Grouped into
@@ -59,7 +59,9 @@ impl Renderer {
                 raw_display_handle: Some(raw_display_handle),
                 raw_window_handle,
             };
-            instance.create_surface_unsafe(target).context("failed to create GPU surface")?
+            instance
+                .create_surface_unsafe(target)
+                .context("failed to create GPU surface")?
         };
 
         let runtime = tokio::runtime::Builder::new_current_thread()

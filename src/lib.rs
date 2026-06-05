@@ -7,13 +7,13 @@ mod health;
 pub mod instance;
 pub mod ipc;
 pub mod notify;
+#[cfg(feature = "ui")]
+pub mod overlay;
+mod overlay_session;
 pub mod paste;
 pub mod prompt;
 pub mod session;
 pub mod state;
-mod overlay_session;
-#[cfg(feature = "ui")]
-pub mod overlay;
 
 use anyhow::Result;
 

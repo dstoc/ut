@@ -18,8 +18,7 @@ pub fn run(invocation: Invocation) -> Result<()> {
             match invocation {
                 Invocation::Start => start_invocation(runtime, pid, config),
                 Invocation::Stop => {
-                    dispatch_or_bootstrap(&runtime, ipc::ControlCommand::StopAndProcess)
-                        .map(|_| ())
+                    dispatch_or_bootstrap(&runtime, ipc::ControlCommand::StopAndProcess).map(|_| ())
                 }
                 Invocation::Status => print_status(&runtime),
                 Invocation::Abort => {

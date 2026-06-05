@@ -6,10 +6,10 @@ use std::sync::{
     Arc, Mutex,
 };
 
+use super::dsp;
 use super::{
     clamp_sample, AudioPayload, AudioVisualizationSnapshot, TARGET_CHANNELS, TARGET_SAMPLE_RATE,
 };
-use super::dsp;
 
 pub struct Recorder {
     stream: cpal::Stream,
@@ -284,8 +284,8 @@ fn resample_linear(samples: &[f32], input_rate: u32, output_rate: u32) -> Vec<f3
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{VISUALIZATION_BAND_COUNT, VISUALIZATION_BIN_COUNT};
+    use super::*;
     use std::sync::mpsc::sync_channel;
 
     #[test]

@@ -1,5 +1,7 @@
+use crate::audio::dsp::{
+    compress_activity, lerp, normalize_level, normalize_level_signed, smoothing_factor, smoothstep,
+};
 use crate::audio::AudioVisualizationSnapshot;
-use crate::audio::dsp::{compress_activity, lerp, normalize_level, normalize_level_signed, smoothing_factor, smoothstep};
 use crate::config::StatusUiConfig;
 use crate::state::SessionPhase;
 use anyhow::{anyhow, Result};
@@ -12,17 +14,13 @@ use smithay_client_toolkit::{
     output::OutputState,
     registry::RegistryState,
     shell::{
-        wlr_layer::{
-            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface,
-        },
+        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerSurface},
         WaylandSurface,
     },
 };
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
-use wayland_client::{
-    globals::registry_queue_init, Connection,
-};
+use wayland_client::{globals::registry_queue_init, Connection};
 
 mod renderer;
 mod wayland;
@@ -326,7 +324,8 @@ impl OverlayApp {
     fn handle_command(&mut self, command: OverlayCommand) {
         match command {
             OverlayCommand::Phase(phase) => {
-                let entering_visible = phase != SessionPhase::Idle && self.phase == SessionPhase::Idle;
+                let entering_visible =
+                    phase != SessionPhase::Idle && self.phase == SessionPhase::Idle;
                 let entering_recording =
                     phase == SessionPhase::Recording && self.phase != SessionPhase::Recording;
                 let entering_processing_like =
@@ -385,16 +384,11 @@ impl OverlayApp {
             let low_band = 0.5 * (target.bands[0] + target.bands[1]);
             let high_band = 0.5 * (target.bands[4] + target.bands[5]);
             let mid_band = 0.5 * (target.bands[2] + target.bands[3]);
-            let fbm_rate =
-                0.28 + 5.40 * target.level + 4.20 * target.transient + 1.60 * high_band;
+            let fbm_rate = 0.28 + 5.40 * target.level + 4.20 * target.transient + 1.60 * high_band;
             self.fbm_phase += dt.as_secs_f32() * fbm_rate;
             let rotation_rate =
-                target.level * 0.80
-                + mid_band * 0.95
-                + high_band * 0.18
-                + target.transient * 0.10;
-            let translation_rate =
-                target.transient * 0.75
+                target.level * 0.80 + mid_band * 0.95 + high_band * 0.18 + target.transient * 0.10;
+            let translation_rate = target.transient * 0.75
                 + high_band * 0.85
                 + mid_band * 0.22
                 + low_band * 0.08
@@ -424,7 +418,12 @@ impl OverlayApp {
         current.frame_index = target.frame_index;
         current.sample_rate = target.sample_rate;
         current.rms = approach(current.rms, target.rms, level_attack, level_release);
-        current.peak = approach(current.peak, target.peak, transient_attack, transient_release);
+        current.peak = approach(
+            current.peak,
+            target.peak,
+            transient_attack,
+            transient_release,
+        );
         current.level = approach(current.level, target.level, level_attack, level_release);
         current.transient = approach(
             current.transient,
@@ -450,8 +449,7 @@ impl OverlayApp {
         }
 
         let duration = Duration::from_millis(self.config.fade_out_ms);
-        let visible_now =
-            self.phase != SessionPhase::Idle || self.fade_started_at.is_some();
+        let visible_now = self.phase != SessionPhase::Idle || self.fade_started_at.is_some();
         let fade_in_alpha = if visible_now {
             if let Some(started_at) = self.visible_started_at {
                 if duration.is_zero() {
@@ -539,7 +537,13 @@ fn accumulate_positive(current: f32, target: f32, attack: f32, decay: f32) -> f3
     lerp(raised, 0.0, decay * 0.45)
 }
 
-fn voice_gate(level: f32, transient: f32, rms: f32, peak: f32, bands: &[f32; VISUALIZATION_BAND_COUNT]) -> f32 {
+fn voice_gate(
+    level: f32,
+    transient: f32,
+    rms: f32,
+    peak: f32,
+    bands: &[f32; VISUALIZATION_BAND_COUNT],
+) -> f32 {
     let bass = bands[0];
     let low_mid = bands[1];
     let mid = bands[2];
@@ -552,12 +556,9 @@ fn voice_gate(level: f32, transient: f32, rms: f32, peak: f32, bands: &[f32; VIS
     let voiced_steadiness = (level * (1.0 - transient * 0.30)).clamp(0.0, 1.0);
     let harmonic_hint = (1.0 - (peak - rms).clamp(0.0, 1.0)).clamp(0.0, 1.0);
 
-    let score = (
-        speech_energy * 0.78
-        + voiced_steadiness * 0.18
-        + harmonic_hint * 0.12
-        - noise_energy * 0.42
-    ).clamp(0.0, 1.0);
+    let score = (speech_energy * 0.78 + voiced_steadiness * 0.18 + harmonic_hint * 0.12
+        - noise_energy * 0.42)
+        .clamp(0.0, 1.0);
 
     let gate = smoothstep(0.06, 0.24, score);
     if gate < 0.18 {
@@ -567,7 +568,9 @@ fn voice_gate(level: f32, transient: f32, rms: f32, peak: f32, bands: &[f32; VIS
     }
 }
 
-fn normalize_legacy_snapshot(mut snapshot: AudioVisualizationSnapshot) -> AudioVisualizationSnapshot {
+fn normalize_legacy_snapshot(
+    mut snapshot: AudioVisualizationSnapshot,
+) -> AudioVisualizationSnapshot {
     snapshot.rms = normalize_level(snapshot.rms, 0.008, 0.120);
     snapshot.peak = normalize_level(snapshot.peak, 0.020, 0.300);
 
@@ -584,9 +587,14 @@ fn normalize_legacy_snapshot(mut snapshot: AudioVisualizationSnapshot) -> AudioV
     snapshot
 }
 
-fn normalize_recording_snapshot(mut snapshot: AudioVisualizationSnapshot) -> AudioVisualizationSnapshot {
-    let base_level = (0.10 + 0.90 * compress_activity(snapshot.level.max(0.0), 4.0)).clamp(0.0, 1.0);
-    let base_transient = compress_activity(snapshot.transient.max(0.0), 14.0).powf(0.85).clamp(0.0, 1.0);
+fn normalize_recording_snapshot(
+    mut snapshot: AudioVisualizationSnapshot,
+) -> AudioVisualizationSnapshot {
+    let base_level =
+        (0.10 + 0.90 * compress_activity(snapshot.level.max(0.0), 4.0)).clamp(0.0, 1.0);
+    let base_transient = compress_activity(snapshot.transient.max(0.0), 14.0)
+        .powf(0.85)
+        .clamp(0.0, 1.0);
     let base_rms = normalize_level(snapshot.rms, 0.008, 0.120);
     let base_peak = normalize_level(snapshot.peak, 0.020, 0.300);
     let mut base_bands = [0.0; VISUALIZATION_BAND_COUNT];
@@ -616,7 +624,8 @@ fn normalize_recording_snapshot(mut snapshot: AudioVisualizationSnapshot) -> Aud
         *value = (base_bands[index] * emphasis * gate).clamp(0.0, 1.0);
     }
 
-    snapshot.waveform = derive_recording_waveform(&snapshot.bands, snapshot.level, snapshot.transient);
+    snapshot.waveform =
+        derive_recording_waveform(&snapshot.bands, snapshot.level, snapshot.transient);
     snapshot
 }
 

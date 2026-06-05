@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use super::{clamp_sample, AudioVisualizationSnapshot, VISUALIZATION_BAND_COUNT, VISUALIZATION_BIN_COUNT};
+use super::{
+    clamp_sample, AudioVisualizationSnapshot, VISUALIZATION_BAND_COUNT, VISUALIZATION_BIN_COUNT,
+};
 
 #[cfg_attr(not(feature = "audio-capture"), allow(dead_code))]
 pub(crate) fn build_visualization_snapshot(
@@ -170,14 +172,13 @@ pub(crate) fn smoothing_factor(dt: Duration, speed: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::TARGET_SAMPLE_RATE;
+    use super::*;
 
     #[test]
     fn builds_visualization_snapshot_from_mono_frames() {
-        let snapshot =
-            build_visualization_snapshot(&[0.0, 0.5, -0.5, 1.0], TARGET_SAMPLE_RATE, 42)
-                .expect("snapshot");
+        let snapshot = build_visualization_snapshot(&[0.0, 0.5, -0.5, 1.0], TARGET_SAMPLE_RATE, 42)
+            .expect("snapshot");
 
         assert_eq!(snapshot.frame_index, 42);
         assert_eq!(snapshot.sample_rate, TARGET_SAMPLE_RATE);
@@ -201,8 +202,7 @@ mod tests {
         let frequency = 2_400.0f32;
         let samples: Vec<f32> = (0..512)
             .map(|index| {
-                let phase =
-                    std::f32::consts::TAU * frequency * index as f32 / sample_rate as f32;
+                let phase = std::f32::consts::TAU * frequency * index as f32 / sample_rate as f32;
                 phase.sin() * 0.8
             })
             .collect();

@@ -1,14 +1,14 @@
 use crate::audio;
+use crate::audio::trim;
 use crate::config::Config;
 use crate::context;
 use crate::dictation;
 use crate::ipc::ControlState;
 use crate::notify;
+use crate::overlay_session::OverlaySession;
 use crate::paste;
 use crate::prompt;
 use crate::state::SessionPhase;
-use crate::overlay_session::OverlaySession;
-use crate::audio::trim;
 use anyhow::Result;
 use std::sync::mpsc;
 use std::sync::Arc;

@@ -215,12 +215,20 @@ fn push_samples_with_visualization<T, F>(
         return;
     }
 
+    // No visualization sink (e.g. UI disabled) means nobody consumes a
+    // snapshot, so skip the per-callback DSP entirely. Building it anyway runs
+    // the full Goertzel band analysis on the realtime audio thread and can blow
+    // the callback deadline on slower machines, causing capture under/overruns.
+    let Some(sink) = visualization_sink else {
+        return;
+    };
+
     let frame_index =
         frame_counter.fetch_add(frame_count as u64, Ordering::Relaxed) + frame_count as u64;
     if let Some(snapshot) =
         dsp::build_visualization_snapshot(&mono_frames, input_sample_rate, frame_index)
     {
-        let _ = try_publish_visualization_snapshot(visualization_sink, snapshot);
+        let _ = try_publish_visualization_snapshot(Some(sink), snapshot);
     }
 }
 

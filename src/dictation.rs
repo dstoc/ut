@@ -49,10 +49,10 @@ impl HttpDictationClient {
             model: self.model.clone(),
             messages: vec![
                 ChatMessage::system(request.prompt),
-                ChatMessage::user(vec![
-                    ContentPart::text("Transcribe the audio and return only the insertable text."),
-                    ContentPart::input_audio(base64_encode(&wav_bytes), "wav"),
-                ]),
+                ChatMessage::user(vec![ContentPart::input_audio(
+                    base64_encode(&wav_bytes),
+                    "wav",
+                )]),
             ],
             temperature: Some(0.0),
         };
@@ -119,6 +119,7 @@ enum ChatContent {
 struct ContentPart {
     #[serde(rename = "type")]
     kind: &'static str,
+    #[allow(dead_code)]
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,6 +127,7 @@ struct ContentPart {
 }
 
 impl ContentPart {
+    #[allow(dead_code)]
     fn text(text: impl Into<String>) -> Self {
         Self {
             kind: "text",

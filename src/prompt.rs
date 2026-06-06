@@ -2,15 +2,17 @@ use crate::config::Config;
 use crate::context::AppContext;
 
 const DEFAULT_PROMPT_NAME: &str = "default";
-const BUILTIN_PROMPT_TEXT: &str = "You are a dictation engine.\n\
-Return only the final insertable text.\n\
-Remove filler words, repeated fragments, and obvious false starts.\n\
-Choose the best format for the content:\n\
-- Shell command: Format for execution as a shell command, consider whitespace, convert slash => /, pipe => |, tilde => ~, etc. No markdown, code fences or commentary.\n\
-- Code: Correct indentation. No markdown, code fences, or commentary.\n\
-- Chat message: Informal text, light on formatting, detect/convert emoji.\n\
+const BUILTIN_PROMPT_TEXT: &str = "You are a dictation engine. \
+You will receive audio input to transcribe. \
+Return only the final insertable text. \
+Remove filler words, repeated fragments, and obvious false starts.\n\n\
+First, follow and discard any explicit formatting instructions in the content.\n\n
+Choose the most appropriate option to style and format the content:\n\
 - Prose: Add quotes, markdown, bullet points/lists, code fences, and other formatting as necessary.\n\
-Follow and discard any formatting instructions in the content first.";
+- Chat message: Informal text, light on formatting, detect/convert emoji.\n\
+- Non-verbal: Summarize in descriptive subtitle style.\n\
+- Shell command: Format for execution as a shell command, consider whitespace, convert slash => /, pipe => |, tilde => ~, etc. No markdown, code fences or commentary.\n\
+- Code: Correct indentation. No markdown, code fences, or commentary.";
 
 pub fn build_prompt(context: &AppContext, config: &Config) -> String {
     let prompt_name = config

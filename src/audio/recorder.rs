@@ -63,8 +63,9 @@ impl Recorder {
             stream_config.buffer_size = cpal::BufferSize::Fixed(target);
         }
 
-        let reserve =
-            input_sample_rate as usize * usize::from(input_channels.max(1)) * CAPTURE_RESERVE_SECONDS;
+        let reserve = input_sample_rate as usize
+            * usize::from(input_channels.max(1))
+            * CAPTURE_RESERVE_SECONDS;
         let captured = Arc::new(Mutex::new(Vec::with_capacity(reserve)));
         let frame_counter = Arc::new(AtomicU64::new(0));
         let err_fn = |err| eprintln!("cpal input error: {err}");

@@ -65,7 +65,6 @@ pub(crate) fn lerp(current: f32, target: f32, t: f32) -> f32 {
     current + (target - current) * t
 }
 
-
 #[cfg_attr(not(feature = "ui"), allow(dead_code))]
 pub(crate) fn smoothing_factor(dt: Duration, speed: f32) -> f32 {
     let seconds = dt.as_secs_f32().max(1.0 / 240.0);

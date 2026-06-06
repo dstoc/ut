@@ -22,7 +22,9 @@ pub fn run(invocation: Invocation) -> Result<()> {
             dispatch_or_bootstrap(&runtime, ipc::ControlCommand::StopAndProcess).map(|_| ())
         }
         Invocation::Status => print_status(&runtime),
-        Invocation::Abort => dispatch_or_bootstrap(&runtime, ipc::ControlCommand::Abort).map(|_| ()),
+        Invocation::Abort => {
+            dispatch_or_bootstrap(&runtime, ipc::ControlCommand::Abort).map(|_| ())
+        }
         Invocation::Toggle => {
             match dispatch_or_bootstrap(&runtime, ipc::ControlCommand::StopAndProcess)? {
                 DispatchOutcome::Delivered => Ok(()),

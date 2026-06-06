@@ -377,8 +377,7 @@ impl OverlayApp {
             let idle_rotation_rate = 0.010;
             let idle_translation_rate = 0.008;
             let rotation_rate = idle_rotation_rate + swirl * 0.34 + target.transient * 0.05;
-            let translation_rate =
-                idle_translation_rate + swirl * 0.30 + target.transient * 0.08;
+            let translation_rate = idle_translation_rate + swirl * 0.30 + target.transient * 0.08;
             self.fbm_rotation_phase += dt.as_secs_f32() * rotation_rate;
             self.fbm_translation_phase += dt.as_secs_f32() * translation_rate;
         } else if processing_like {

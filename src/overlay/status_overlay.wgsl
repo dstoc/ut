@@ -1,17 +1,11 @@
-// Uniform packing from src/ui.rs:
-// - header = (elapsed_time, processing_elapsed_or_zero, fade_alpha, accumulated_fbm_phase)
-// - audio = (rms, peak, surface_width, surface_height)
-// - motion = (accumulated_fbm_rotation, accumulated_fbm_translation, center_x, center_y)
-// - waveform = 32 bins packed as 8 vec4 values
-// - reactivity0 = (level, transient, band0, band1)
-// - reactivity1 = (band2, band3, band4, band5)
+// Uniform packing from Renderer::write_uniforms (src/overlay/renderer.rs):
+// - header = (elapsed_time, processing_elapsed_or_zero, fade_alpha, _pad)
+// - audio  = (voice_pulse, peak, surface_width, surface_height)
+// - motion = (accumulated_fbm_rotation, accumulated_fbm_translation, _pad, _pad)
 struct Uniforms {
     header: vec4<f32>,
     audio: vec4<f32>,
     motion: vec4<f32>,
-    waveform: array<vec4<f32>, 8>,
-    reactivity0: vec4<f32>,
-    reactivity1: vec4<f32>,
 }
 
 @group(0) @binding(0)
@@ -51,10 +45,6 @@ fn orb_space(uv: vec2<f32>) -> vec2<f32> {
     let aspect = size.x / size.y;
     let centered = uv - vec2<f32>(0.5, 0.5);
     return vec2<f32>(centered.x * aspect, centered.y);
-}
-
-fn circle_mask(d: f32, radius: f32, feather: f32) -> f32 {
-    return 1.0 - smoothstep(radius - feather, radius + feather, d);
 }
 
 // Hash/value-noise/FBM helpers for the recording interior texture.
@@ -151,55 +141,23 @@ fn ease_in_out_01(t: f32) -> f32 {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let time = uniforms.header.x;
     let processing_elapsed = uniforms.header.y;
     let fade = clamp(uniforms.header.z, 0.0, 1.0);
     let uv = input.uv;
     let p = orb_space(uv);
-    let dist = length(p);
     let is_processing = processing_elapsed > 0.0;
-    let rms_live = clamp(uniforms.audio.x, 0.0, 1.0);
-    let peak_live = clamp(uniforms.audio.y, 0.0, 1.0);
+    let pulse = clamp(uniforms.audio.x, 0.0, 1.0);
+    let peak = clamp(uniforms.audio.y, 0.0, 1.0);
 
     var alpha = 0.0;
     var color = vec3<f32>(0.02, 0.06, 0.16);
 
-    let band0 = clamp(uniforms.reactivity0.z, 0.0, 1.0);
-    let band1 = clamp(uniforms.reactivity0.w, 0.0, 1.0);
-    let band2 = clamp(uniforms.reactivity1.x, 0.0, 1.0);
-    let band3 = clamp(uniforms.reactivity1.y, 0.0, 1.0);
-    let band4 = clamp(uniforms.reactivity1.z, 0.0, 1.0);
-    let band5 = clamp(uniforms.reactivity1.w, 0.0, 1.0);
-
-    let low_live = clamp(0.5 * (band0 + band1) * 3.5, 0.0, 1.0);
-    let mid_live = clamp(0.5 * (band2 + band3) * 4.5, 0.0, 1.0);
-    let high_live = clamp(0.5 * (band4 + band5) * 6.0, 0.0, 1.0);
-
-    let rms = rms_live;
-    let peak = peak_live;
-    let low = low_live;
-    let mid = mid_live;
-    let high = high_live;
-
-    let drive_low = 0.0 * WARP * clamp(0.65 * low + 0.20 * rms + 0.15 * peak, 0.0, 1.0);
-    let drive_mid = WARP * clamp(0.65 * mid + 0.20 * rms + 0.15 * peak, 0.0, 1.0);
-    let drive_high = WARP * clamp(0.65 * high + 0.15 * rms + 0.20 * peak, 0.0, 1.0);
-    let drive_all = WARP * clamp(0.20 * rms + 0.20 * peak + 0.20 * mid + 0.20 * high, 0.0, 1.0);
-    let active_bands = BANDS;
-    let gated_drive_low = drive_low;
-    let gated_drive_mid = drive_mid;
-    let gated_drive_high = drive_high;
-    let gated_drive_all = drive_all;
-    let px = 1.75 / min(uniforms.audio.z, uniforms.audio.w);
+    let drive = WARP * clamp(0.75 * pulse + 0.25 * peak, 0.0, 1.0);
+    let accent = WARP * clamp(0.45 * pulse + 0.55 * peak, 0.0, 1.0);
     let recording_radius_scale =
         1.0
-        + 0.25 * clamp(
-            0.45 * rms + 0.35 * peak + 0.35 * mid + 0.20 * high,
-            0.0,
-            1.0,
-        );
+        + 0.25 * clamp(0.70 * pulse + 0.30 * peak, 0.0, 1.0);
     let radius = select(ORB_RADIUS, ORB_RADIUS * recording_radius_scale, !is_processing);
-    let mask = circle_mask(dist, radius, px * 2.0);
     let processing_half_cycle = 2.0;
     let processing_cycle = processing_half_cycle * 2.0;
     let processing_phase = processing_elapsed - floor(processing_elapsed / processing_cycle) * processing_cycle;
@@ -261,10 +219,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let ang3 = monotonic_rotation * 0.87 - monotonic_translation * 0.10;
         let ang4 = -monotonic_rotation * 1.08 - monotonic_translation * 0.06;
 
-        let warp_amt1 = 1.10 * gated_drive_low + 0.25 * gated_drive_all;
-        let warp_amt2 = 1.00 * gated_drive_mid + 0.20 * gated_drive_all;
-        let warp_amt3 = 0.95 * gated_drive_high + 0.15 * gated_drive_all;
-        let warp_amt4 = 0.55 * gated_drive_all;
+        let warp_amt1 = 0.20 * drive;
+        let warp_amt2 = 0.32 * drive + 0.08 * accent;
+        let warp_amt3 = 0.26 * drive + 0.16 * accent;
+        let warp_amt4 = 0.18 * drive + 0.10 * accent;
 
         let w1 = fbm_vec2(rot(ang1) * (q * 0.90) + td1 * 1.8 + vec2<f32>(0.0, 3.1));
         q += (w1 - 0.5) * warp_amt1;
@@ -282,37 +240,32 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let f1 = fbm(q * 1.9 + vec2<f32>(4.2, -1.7));
         let f2 = fbm(q * 0.7 - vec2<f32>(2.3, 1.1));
         let tex_raw = clamp(f0 * 0.62 + f1 * 0.28 + f2 * 0.20, 0.0, 1.0);
-
-        let band_mix = clamp(BAND_STRENGTH * clamp(0.30 + 1.00 * gated_drive_all, 0.0, 1.0) + 0.10, 0.0, 1.0);
-        let tex_bands = tex_raw * active_bands;
+        let band_mix = clamp(BAND_STRENGTH * clamp(0.30 + drive, 0.0, 1.0) + 0.10, 0.0, 1.0);
+        let tex_bands = tex_raw * BANDS;
         let band_index = floor(tex_bands);
         let band_frac = fract(tex_bands);
-        let stepped = band_index / max(active_bands - 1.0, 1.0);
+        let stepped = band_index / max(BANDS - 1.0, 1.0);
         let tex = clamp((mix(tex_raw, stepped, band_mix) - 0.5) * 1.28 + 0.5, 0.0, 1.0);
 
         let edge_dist = min(band_frac, 1.0 - band_frac);
         var contour = 1.0 - smoothstep(0.0, BAND_LINE_WIDTH, edge_dist);
-        contour *= BAND_LINE_STRENGTH * clamp(0.55 + 0.95 * gated_drive_all, 0.0, 1.0);
+        contour *= BAND_LINE_STRENGTH * clamp(0.55 + 0.95 * drive, 0.0, 1.0);
 
         let center_light = pow(max(n.z, 0.0), 0.85);
         let shade = 0.68 + 0.26 * center_light;
         let rim = smoothstep(0.55, 1.0, rr);
         let fresnel = pow(1.0 - max(n.z, 0.0), 2.1);
 
-        let rainbow_band_t =
-            stepped
-            + band_frac * 0.08
-            + monotonic_rotation * 0.006;
+        let rainbow_band_t = stepped + band_frac * 0.08 + monotonic_rotation * 0.006;
         let rainbow_cycle_t = monotonic_translation * 1.20;
-        let rainbow_color = rainbow_band_color(rainbow_band_t + rainbow_cycle_t);
-        var tex_color = rainbow_color;
+        var tex_color = rainbow_band_color(rainbow_band_t + rainbow_cycle_t);
         tex_color += vec3<f32>(1.0, 1.0, 1.0) * contour * 0.38;
 
         let body =
             tex_color * shade
-            + tex_color * tex * 0.08
-            + vec3<f32>(1.0, 1.0, 1.0) * rim * 0.10
-            + vec3<f32>(1.0, 1.0, 1.0) * fresnel * 0.08;
+            + tex_color * tex * (0.10 + 0.08 * peak)
+            + vec3<f32>(1.0, 1.0, 1.0) * rim * (0.10 + 0.06 * pulse)
+            + vec3<f32>(1.0, 1.0, 1.0) * fresnel * (0.08 + 0.05 * peak);
 
         color = body;
         alpha = 1.0;

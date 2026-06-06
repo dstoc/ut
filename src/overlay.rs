@@ -1,13 +1,10 @@
-use crate::audio::dsp::{
-    compress_activity, lerp, normalize_level, normalize_level_signed, smoothing_factor,
-};
+use crate::audio::dsp::{compress_activity, lerp, normalize_level, smoothing_factor};
 use crate::audio::AudioVisualizationSnapshot;
 use crate::config::StatusUiConfig;
 use crate::state::SessionPhase;
 use anyhow::{anyhow, Result};
 use std::thread;
 
-use crate::audio::{VISUALIZATION_BAND_COUNT, VISUALIZATION_BIN_COUNT};
 use anyhow::Context;
 use smithay_client_toolkit::{
     compositor::{CompositorState, Region},
@@ -153,15 +150,8 @@ fn run_overlay_thread(
 
         let registry_state = RegistryState::new(&globals);
         let output_state = OutputState::new(&globals, &qh);
-        let graphics = Renderer::new(
-            &conn,
-            &layer_surface,
-            config.width,
-            config.height,
-            config.x,
-            config.y,
-        )
-        .context("failed to initialize status UI renderer")?;
+        let graphics = Renderer::new(&conn, &layer_surface, config.width, config.height)
+            .context("failed to initialize status UI renderer")?;
 
         let (command_tx, command_rx) = mpsc::channel();
         ready_tx
@@ -212,7 +202,6 @@ pub(super) struct OverlayApp {
     pub(super) visible_started_at: Option<Instant>,
     pub(super) processing_started_at: Option<Instant>,
     pub(super) started_at: Instant,
-    pub(super) fbm_phase: f32,
     pub(super) fbm_rotation_phase: f32,
     pub(super) fbm_translation_phase: f32,
     pub(super) abort_requested: bool,
@@ -247,7 +236,6 @@ impl OverlayApp {
             visible_started_at: None,
             processing_started_at: None,
             started_at: Instant::now(),
-            fbm_phase: 0.0,
             fbm_rotation_phase: 0.0,
             fbm_translation_phase: 0.0,
             abort_requested: false,
@@ -304,10 +292,9 @@ impl OverlayApp {
 
             if !self.first_configure {
                 self.graphics.render(FrameParams {
-                    phase_value: self.shader_phase_value(now),
+                    processing_elapsed: self.shader_phase_value(now),
                     audio: self.displayed_audio.as_ref(),
                     fade_alpha: self.fade_alpha(now),
-                    fbm_phase: self.fbm_phase,
                     fbm_rotation_phase: self.fbm_rotation_phase,
                     fbm_translation_phase: self.fbm_translation_phase,
                     elapsed: now.saturating_duration_since(self.started_at),
@@ -338,7 +325,6 @@ impl OverlayApp {
                 }
                 if entering_recording {
                     self.processing_started_at = None;
-                    self.fbm_phase = 0.0;
                     self.fbm_rotation_phase = 0.0;
                     self.fbm_translation_phase = 0.0;
                 }
@@ -381,23 +367,22 @@ impl OverlayApp {
 
         if self.phase == SessionPhase::Recording {
             target = normalize_recording_snapshot(target);
-            let low_band = 0.5 * (target.bands[0] + target.bands[1]);
-            let high_band = 0.5 * (target.bands[4] + target.bands[5]);
-            let mid_band = 0.5 * (target.bands[2] + target.bands[3]);
-            let fbm_rate = 0.28 + 5.40 * target.level + 4.20 * target.transient + 1.60 * high_band;
-            self.fbm_phase += dt.as_secs_f32() * fbm_rate;
-            let rotation_rate =
-                target.level * 0.80 + mid_band * 0.95 + high_band * 0.18 + target.transient * 0.10;
-            let translation_rate = target.transient * 0.75
-                + high_band * 0.85
-                + mid_band * 0.22
-                + low_band * 0.08
-                + target.level * 0.12;
+            // Swirl is driven by the voice pulse (level) and onsets (transient).
+            // Scaling with the square of the pulse means quiet speech barely
+            // swirls and it builds smoothly; transient influence is kept small
+            // so onsets don't cause jerky churn.
+            let swirl = target.level * target.level;
+            // Keep a barely-moving baseline drift when VAD is closed so the
+            // texture does not freeze completely between phrases.
+            let idle_rotation_rate = 0.010;
+            let idle_translation_rate = 0.008;
+            let rotation_rate = idle_rotation_rate + swirl * 0.34 + target.transient * 0.05;
+            let translation_rate =
+                idle_translation_rate + swirl * 0.30 + target.transient * 0.08;
             self.fbm_rotation_phase += dt.as_secs_f32() * rotation_rate;
             self.fbm_translation_phase += dt.as_secs_f32() * translation_rate;
         } else if processing_like {
             target = processing_audio_snapshot();
-            self.fbm_phase += dt.as_secs_f32() * 0.45;
             self.fbm_rotation_phase = 0.0;
             self.fbm_translation_phase = 0.0;
         } else {
@@ -406,18 +391,13 @@ impl OverlayApp {
 
         let current = self.displayed_audio.get_or_insert_with(|| target.clone());
 
-        let level_attack = smoothing_factor(dt, 16.0);
-        let level_release = smoothing_factor(dt, 6.0);
+        let level_attack = smoothing_factor(dt, 24.0);
+        let level_release = smoothing_factor(dt, 16.0);
         let transient_attack = smoothing_factor(dt, 28.0);
         let transient_release = smoothing_factor(dt, 18.0);
-        let band_attack = smoothing_factor(dt, 18.0);
-        let band_release = smoothing_factor(dt, 7.0);
-        let waveform_attack = smoothing_factor(dt, 14.0);
-        let waveform_release = smoothing_factor(dt, 8.0);
 
         current.frame_index = target.frame_index;
         current.sample_rate = target.sample_rate;
-        current.rms = approach(current.rms, target.rms, level_attack, level_release);
         current.peak = approach(
             current.peak,
             target.peak,
@@ -431,16 +411,6 @@ impl OverlayApp {
             transient_attack,
             transient_release,
         );
-        for (value, target_value) in current.bands.iter_mut().zip(target.bands.iter()) {
-            *value = if self.phase == SessionPhase::Recording && target.level > 0.03 {
-                accumulate_positive(*value, *target_value, band_attack, band_release)
-            } else {
-                approach(*value, *target_value, band_attack, band_release)
-            };
-        }
-        for (value, target_value) in current.waveform.iter_mut().zip(target.waveform.iter()) {
-            *value = approach(*value, *target_value, waveform_attack, waveform_release);
-        }
     }
 
     fn fade_alpha(&self, now: Instant) -> f32 {
@@ -508,17 +478,7 @@ impl OverlayApp {
 }
 
 fn zero_audio_snapshot() -> AudioVisualizationSnapshot {
-    AudioVisualizationSnapshot {
-        frame_index: 0,
-        sample_rate: 0,
-        rms: 0.0,
-        peak: 0.0,
-        level: 0.0,
-        transient: 0.0,
-        voice_probability: 0.0,
-        bands: [0.0; VISUALIZATION_BAND_COUNT],
-        waveform: [0.0; VISUALIZATION_BIN_COUNT],
-    }
+    AudioVisualizationSnapshot::default()
 }
 
 fn approach(current: f32, target: f32, attack: f32, release: f32) -> f32 {
@@ -529,30 +489,14 @@ fn approach(current: f32, target: f32, attack: f32, release: f32) -> f32 {
     }
 }
 
-fn accumulate_positive(current: f32, target: f32, attack: f32, decay: f32) -> f32 {
-    let raised = if target > current {
-        lerp(current, target, attack)
-    } else {
-        current
-    };
-    lerp(raised, 0.0, decay * 0.45)
-}
-
 fn normalize_legacy_snapshot(
     mut snapshot: AudioVisualizationSnapshot,
 ) -> AudioVisualizationSnapshot {
-    snapshot.rms = normalize_level(snapshot.rms, 0.008, 0.120);
+    // Idle-before-fade ambient: a gentle pulse from the lightly-normalized
+    // envelope. No voice gate here — this state is barely visible.
+    let level = normalize_level(snapshot.level, 0.05, 0.80);
+    snapshot.level = level;
     snapshot.peak = normalize_level(snapshot.peak, 0.020, 0.300);
-
-    for value in &mut snapshot.bands {
-        *value = value.clamp(0.0, 1.0);
-    }
-
-    for value in &mut snapshot.waveform {
-        *value = normalize_level_signed(*value, 0.015, 0.250);
-    }
-
-    snapshot.level = snapshot.rms;
     snapshot.transient = snapshot.peak;
     snapshot
 }
@@ -565,83 +509,19 @@ fn normalize_recording_snapshot(
     let base_transient = compress_activity(snapshot.transient.max(0.0), 14.0)
         .powf(0.85)
         .clamp(0.0, 1.0);
-    let mut base_bands = [0.0; VISUALIZATION_BAND_COUNT];
-
-    for (index, value) in snapshot.bands.iter().enumerate() {
-        let gain = 2.2 + index as f32 * 0.35;
-        let compressed = compress_activity((*value).max(0.0), gain).powf(0.9);
-        base_bands[index] = compressed.clamp(0.0, 1.0);
-    }
 
     // Voice-activity detection (RNNoise) decides whether this is speech; the
-    // band/level features only shape how it animates. This replaces the old
-    // hand-tuned spectral heuristic.
+    // loudness envelope sets how far the blob swells. A single voice pulse
+    // drives everything — `level` is the value the shader reads as `audio.x`.
     let gate = snapshot.voice_probability.clamp(0.0, 1.0);
+    let pulse = (gate * base_level).clamp(0.0, 1.0);
 
-    snapshot.level = (base_level * gate).clamp(0.0, 1.0);
+    snapshot.level = pulse;
     snapshot.transient = (base_transient * gate).clamp(0.0, 1.0);
-    snapshot.rms = snapshot.level;
-    snapshot.peak = (snapshot.transient.max(snapshot.level * 0.72)).clamp(0.0, 1.0);
-
-    for (index, value) in snapshot.bands.iter_mut().enumerate() {
-        let emphasis = match index {
-            0 => 0.10,
-            1 => 0.55,
-            2 => 1.00,
-            3 => 0.95,
-            4 => 0.45,
-            _ => 0.12,
-        };
-        *value = (base_bands[index] * emphasis * gate).clamp(0.0, 1.0);
-    }
-
-    snapshot.waveform =
-        derive_recording_waveform(&snapshot.bands, snapshot.level, snapshot.transient);
+    snapshot.peak = (snapshot.transient.max(pulse * 0.72)).clamp(0.0, 1.0);
     snapshot
 }
 
 fn processing_audio_snapshot() -> AudioVisualizationSnapshot {
-    let bands = [0.0; VISUALIZATION_BAND_COUNT];
-    let level: f32 = 0.0;
-    let transient: f32 = 0.0;
-    AudioVisualizationSnapshot {
-        frame_index: 0,
-        sample_rate: 0,
-        rms: level,
-        peak: transient.max(level * 0.72),
-        level,
-        transient,
-        voice_probability: 0.0,
-        bands,
-        waveform: derive_recording_waveform(&bands, level, transient),
-    }
-}
-
-fn derive_recording_waveform(
-    bands: &[f32; VISUALIZATION_BAND_COUNT],
-    level: f32,
-    transient: f32,
-) -> [f32; VISUALIZATION_BIN_COUNT] {
-    let mut waveform = [0.0f32; VISUALIZATION_BIN_COUNT];
-    let last_band = VISUALIZATION_BAND_COUNT.saturating_sub(1) as f32;
-    let band_tilt = (bands[0] + bands[1] * 0.6) - (bands[4] + bands[5] * 0.6);
-    let detail = 0.12 + 0.20 * level + 0.24 * transient;
-
-    for (index, value) in waveform.iter_mut().enumerate() {
-        let position = if VISUALIZATION_BIN_COUNT > 1 {
-            index as f32 / (VISUALIZATION_BIN_COUNT - 1) as f32
-        } else {
-            0.0
-        };
-        let band_position = position * last_band;
-        let left = band_position.floor() as usize;
-        let right = left.min(VISUALIZATION_BAND_COUNT - 1);
-        let next = (right + 1).min(VISUALIZATION_BAND_COUNT - 1);
-        let band_mix = lerp(bands[right], bands[next], band_position - right as f32);
-        let wobble = (position * std::f32::consts::TAU * 3.0 + level * 2.5 + transient * 4.0).sin();
-        let slope = (position - 0.5) * band_tilt;
-        *value = (band_mix - 0.48 + slope * 0.55 + wobble * detail * 0.14).clamp(-1.0, 1.0);
-    }
-
-    waveform
+    AudioVisualizationSnapshot::default()
 }

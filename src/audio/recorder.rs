@@ -377,7 +377,6 @@ fn resample_linear(samples: &[f32], input_rate: u32, output_rate: u32) -> Vec<f3
 
 #[cfg(test)]
 mod tests {
-    use super::super::{VISUALIZATION_BAND_COUNT, VISUALIZATION_BIN_COUNT};
     use super::*;
     use std::sync::mpsc::sync_channel;
 
@@ -401,13 +400,10 @@ mod tests {
         sink.send(AudioVisualizationSnapshot {
             frame_index: 1,
             sample_rate: TARGET_SAMPLE_RATE,
-            rms: 0.25,
-            peak: 0.5,
             level: 0.25,
             transient: 0.0,
+            peak: 0.5,
             voice_probability: 0.0,
-            bands: [0.0; VISUALIZATION_BAND_COUNT],
-            waveform: [0.0; VISUALIZATION_BIN_COUNT],
         })
         .unwrap();
 
@@ -416,13 +412,10 @@ mod tests {
             AudioVisualizationSnapshot {
                 frame_index: 2,
                 sample_rate: TARGET_SAMPLE_RATE,
-                rms: 0.75,
-                peak: 1.0,
                 level: 1.0,
                 transient: 1.0,
+                peak: 1.0,
                 voice_probability: 1.0,
-                bands: [1.0; VISUALIZATION_BAND_COUNT],
-                waveform: [1.0; VISUALIZATION_BIN_COUNT],
             },
         );
 

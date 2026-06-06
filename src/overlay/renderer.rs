@@ -12,10 +12,9 @@ use wayland_client::{Connection, Proxy};
 /// a struct so `render`/`write_uniforms` stay under clippy's argument limit and
 /// share one source of truth for the field set.
 pub(crate) struct FrameParams<'a> {
-    pub(crate) phase_value: f32,
+    pub(crate) processing_elapsed: f32,
     pub(crate) audio: Option<&'a AudioVisualizationSnapshot>,
     pub(crate) fade_alpha: f32,
-    pub(crate) fbm_phase: f32,
     pub(crate) fbm_rotation_phase: f32,
     pub(crate) fbm_translation_phase: f32,
     pub(crate) elapsed: Duration,
@@ -27,8 +26,6 @@ pub(crate) struct Renderer {
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     pub(crate) config: wgpu::SurfaceConfiguration,
-    pub(crate) center_x: f32,
-    pub(crate) center_y: f32,
     pub(crate) pipeline: wgpu::RenderPipeline,
     pub(crate) uniform_buffer: wgpu::Buffer,
     pub(crate) uniform_bind_group: wgpu::BindGroup,
@@ -40,8 +37,6 @@ impl Renderer {
         layer_surface: &LayerSurface,
         width: u32,
         height: u32,
-        center_x: f32,
-        center_y: f32,
     ) -> Result<Self> {
         let instance = wgpu::Instance::default();
 
@@ -192,18 +187,15 @@ impl Renderer {
             device,
             queue,
             config: surface_config,
-            center_x,
-            center_y,
             pipeline,
             uniform_buffer,
             uniform_bind_group,
         };
 
         state.write_uniforms(&FrameParams {
-            phase_value: 0.0,
+            processing_elapsed: 0.0,
             audio: None,
             fade_alpha: 0.0,
-            fbm_phase: 0.0,
             fbm_rotation_phase: 0.0,
             fbm_translation_phase: 0.0,
             elapsed: Duration::ZERO,
@@ -283,10 +275,9 @@ impl Renderer {
 
     pub(crate) fn write_uniforms(&self, params: &FrameParams) {
         let FrameParams {
-            phase_value,
+            processing_elapsed,
             audio,
             fade_alpha,
-            fbm_phase,
             fbm_rotation_phase,
             fbm_translation_phase,
             elapsed,
@@ -294,49 +285,22 @@ impl Renderer {
         let snapshot = audio.cloned().unwrap_or_default();
 
         let mut bytes = Vec::with_capacity(UNIFORM_BUFFER_SIZE);
+        // header = (elapsed, processing_elapsed, fade, _pad)
         push_f32(&mut bytes, elapsed.as_secs_f32());
-        push_f32(&mut bytes, *phase_value);
+        push_f32(&mut bytes, *processing_elapsed);
         push_f32(&mut bytes, fade_alpha.clamp(0.0, 1.0));
-        push_f32(&mut bytes, *fbm_phase);
+        push_f32(&mut bytes, 0.0);
 
-        push_f32(&mut bytes, snapshot.rms);
+        // audio = (voice pulse, peak, width, height)
+        push_f32(&mut bytes, snapshot.level);
         push_f32(&mut bytes, snapshot.peak);
         push_f32(&mut bytes, self.config.width as f32);
         push_f32(&mut bytes, self.config.height as f32);
 
+        // motion = (rotation phase, translation phase, _pad, _pad)
         push_vec4(
             &mut bytes,
-            [
-                *fbm_rotation_phase,
-                *fbm_translation_phase,
-                self.center_x,
-                self.center_y,
-            ],
-        );
-
-        for group in snapshot.waveform.chunks_exact(4) {
-            for &value in group {
-                push_f32(&mut bytes, value);
-            }
-        }
-
-        push_vec4(
-            &mut bytes,
-            [
-                snapshot.level,
-                snapshot.transient,
-                snapshot.bands[0],
-                snapshot.bands[1],
-            ],
-        );
-        push_vec4(
-            &mut bytes,
-            [
-                snapshot.bands[2],
-                snapshot.bands[3],
-                snapshot.bands[4],
-                snapshot.bands[5],
-            ],
+            [*fbm_rotation_phase, *fbm_translation_phase, 0.0, 0.0],
         );
 
         self.queue.write_buffer(&self.uniform_buffer, 0, &bytes);
@@ -353,6 +317,6 @@ fn push_vec4(bytes: &mut Vec<u8>, values: [f32; 4]) {
     }
 }
 
-const UNIFORM_BUFFER_SIZE: usize = 208;
+const UNIFORM_BUFFER_SIZE: usize = 48;
 
 const SHADER_WGSL: &str = include_str!("status_overlay.wgsl");

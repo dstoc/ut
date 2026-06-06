@@ -20,8 +20,6 @@ pub use recorder_stub::Recorder;
 
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
 pub const TARGET_CHANNELS: u16 = 1;
-pub const VISUALIZATION_BIN_COUNT: usize = 32;
-pub const VISUALIZATION_BAND_COUNT: usize = 6;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioPayload {
@@ -44,15 +42,16 @@ impl AudioPayload {
 pub struct AudioVisualizationSnapshot {
     pub frame_index: u64,
     pub sample_rate: u32,
-    pub rms: f32,
-    pub peak: f32,
+    /// Loudness envelope from the DSP; the overlay overwrites it with the gated
+    /// voice pulse (the value the shader reads as `audio.x`).
     pub level: f32,
+    /// Onset/transient envelope; drives the swirl-rate accumulation.
     pub transient: f32,
+    /// Sharper companion to `level` (the shader reads it as `audio.y`).
+    pub peak: f32,
     /// Smoothed speech probability in `[0, 1]` from the voice-activity
-    /// detector; the overlay uses it to react to voice and ignore noise.
+    /// detector; the overlay uses it to gate the pulse.
     pub voice_probability: f32,
-    pub bands: [f32; VISUALIZATION_BAND_COUNT],
-    pub waveform: [f32; VISUALIZATION_BIN_COUNT],
 }
 
 fn clamp_sample(sample: f32) -> f32 {

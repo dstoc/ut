@@ -1,5 +1,5 @@
 use crate::audio::dsp::{
-    compress_activity, lerp, normalize_level, normalize_level_signed, smoothing_factor, smoothstep,
+    compress_activity, lerp, normalize_level, normalize_level_signed, smoothing_factor,
 };
 use crate::audio::AudioVisualizationSnapshot;
 use crate::config::StatusUiConfig;
@@ -515,6 +515,7 @@ fn zero_audio_snapshot() -> AudioVisualizationSnapshot {
         peak: 0.0,
         level: 0.0,
         transient: 0.0,
+        voice_probability: 0.0,
         bands: [0.0; VISUALIZATION_BAND_COUNT],
         waveform: [0.0; VISUALIZATION_BIN_COUNT],
     }
@@ -535,37 +536,6 @@ fn accumulate_positive(current: f32, target: f32, attack: f32, decay: f32) -> f3
         current
     };
     lerp(raised, 0.0, decay * 0.45)
-}
-
-fn voice_gate(
-    level: f32,
-    transient: f32,
-    rms: f32,
-    peak: f32,
-    bands: &[f32; VISUALIZATION_BAND_COUNT],
-) -> f32 {
-    let bass = bands[0];
-    let low_mid = bands[1];
-    let mid = bands[2];
-    let upper_mid = bands[3];
-    let presence = bands[4];
-    let air = bands[5];
-
-    let speech_energy = low_mid * 0.60 + mid * 1.00 + upper_mid * 0.90 + presence * 0.30;
-    let noise_energy = bass * 0.75 + air * 0.85;
-    let voiced_steadiness = (level * (1.0 - transient * 0.30)).clamp(0.0, 1.0);
-    let harmonic_hint = (1.0 - (peak - rms).clamp(0.0, 1.0)).clamp(0.0, 1.0);
-
-    let score = (speech_energy * 0.78 + voiced_steadiness * 0.18 + harmonic_hint * 0.12
-        - noise_energy * 0.42)
-        .clamp(0.0, 1.0);
-
-    let gate = smoothstep(0.06, 0.24, score);
-    if gate < 0.18 {
-        0.0
-    } else {
-        gate
-    }
 }
 
 fn normalize_legacy_snapshot(
@@ -595,8 +565,6 @@ fn normalize_recording_snapshot(
     let base_transient = compress_activity(snapshot.transient.max(0.0), 14.0)
         .powf(0.85)
         .clamp(0.0, 1.0);
-    let base_rms = normalize_level(snapshot.rms, 0.008, 0.120);
-    let base_peak = normalize_level(snapshot.peak, 0.020, 0.300);
     let mut base_bands = [0.0; VISUALIZATION_BAND_COUNT];
 
     for (index, value) in snapshot.bands.iter().enumerate() {
@@ -605,7 +573,10 @@ fn normalize_recording_snapshot(
         base_bands[index] = compressed.clamp(0.0, 1.0);
     }
 
-    let gate = voice_gate(base_level, base_transient, base_rms, base_peak, &base_bands);
+    // Voice-activity detection (RNNoise) decides whether this is speech; the
+    // band/level features only shape how it animates. This replaces the old
+    // hand-tuned spectral heuristic.
+    let gate = snapshot.voice_probability.clamp(0.0, 1.0);
 
     snapshot.level = (base_level * gate).clamp(0.0, 1.0);
     snapshot.transient = (base_transient * gate).clamp(0.0, 1.0);
@@ -640,6 +611,7 @@ fn processing_audio_snapshot() -> AudioVisualizationSnapshot {
         peak: transient.max(level * 0.72),
         level,
         transient,
+        voice_probability: 0.0,
         bands,
         waveform: derive_recording_waveform(&bands, level, transient),
     }

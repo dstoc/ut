@@ -63,6 +63,7 @@ pub(crate) fn build_visualization_snapshot(
         peak,
         level,
         transient,
+        voice_probability: 0.0,
         bands,
         waveform,
     })
@@ -154,15 +155,6 @@ pub(crate) fn lerp(current: f32, target: f32, t: f32) -> f32 {
     current + (target - current) * t
 }
 
-#[cfg_attr(not(feature = "ui"), allow(dead_code))]
-pub(crate) fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    if edge0 == edge1 {
-        return if x < edge0 { 0.0 } else { 1.0 };
-    }
-
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
 
 #[cfg_attr(not(feature = "ui"), allow(dead_code))]
 pub(crate) fn smoothing_factor(dt: Duration, speed: f32) -> f32 {

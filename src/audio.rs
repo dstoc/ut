@@ -8,6 +8,9 @@ pub use recorder::Recorder;
 #[cfg(any(feature = "audio-capture", feature = "ui"))]
 pub(crate) mod dsp;
 
+#[cfg(any(feature = "audio-capture", feature = "ui"))]
+pub(crate) mod vad;
+
 pub mod trim;
 
 #[cfg(not(feature = "audio-capture"))]
@@ -45,6 +48,9 @@ pub struct AudioVisualizationSnapshot {
     pub peak: f32,
     pub level: f32,
     pub transient: f32,
+    /// Smoothed speech probability in `[0, 1]` from the voice-activity
+    /// detector; the overlay uses it to react to voice and ignore noise.
+    pub voice_probability: f32,
     pub bands: [f32; VISUALIZATION_BAND_COUNT],
     pub waveform: [f32; VISUALIZATION_BIN_COUNT],
 }

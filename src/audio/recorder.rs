@@ -302,12 +302,15 @@ fn spawn_visualization_worker(
     sink: SyncSender<AudioVisualizationSnapshot>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
+        let mut vad = super::vad::VoiceActivityDetector::new();
         while let Ok(frame) = frames.recv() {
-            if let Some(snapshot) = dsp::build_visualization_snapshot(
+            let voice_probability = vad.observe(&frame.mono_frames, frame.sample_rate);
+            if let Some(mut snapshot) = dsp::build_visualization_snapshot(
                 &frame.mono_frames,
                 frame.sample_rate,
                 frame.frame_index,
             ) {
+                snapshot.voice_probability = voice_probability;
                 let _ = try_publish_visualization_snapshot(Some(&sink), snapshot);
             }
         }
@@ -402,6 +405,7 @@ mod tests {
             peak: 0.5,
             level: 0.25,
             transient: 0.0,
+            voice_probability: 0.0,
             bands: [0.0; VISUALIZATION_BAND_COUNT],
             waveform: [0.0; VISUALIZATION_BIN_COUNT],
         })
@@ -416,6 +420,7 @@ mod tests {
                 peak: 1.0,
                 level: 1.0,
                 transient: 1.0,
+                voice_probability: 1.0,
                 bands: [1.0; VISUALIZATION_BAND_COUNT],
                 waveform: [1.0; VISUALIZATION_BIN_COUNT],
             },

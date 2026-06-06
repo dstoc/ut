@@ -1,10 +1,13 @@
 use crate::context::AppContext;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+
+pub const RESERVED_CHAT_COMPLETION_BODY_KEYS: &[&str] = &["model", "messages", "temperature"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -48,6 +51,7 @@ impl Config {
         if self.model.timeout_seconds == 0 {
             anyhow::bail!("model.timeout_seconds must be greater than 0");
         }
+        self.model.validate_extra_body()?;
         if self.status_ui.width == 0 {
             anyhow::bail!("status_ui.width must be greater than 0");
         }
@@ -123,6 +127,7 @@ pub struct ModelConfig {
     pub timeout_seconds: u64,
     pub api_key: Option<String>,
     pub api_key_env: Option<String>,
+    pub extra_body: Map<String, Value>,
 }
 
 impl Default for ModelConfig {
@@ -133,6 +138,7 @@ impl Default for ModelConfig {
             timeout_seconds: 60,
             api_key: None,
             api_key_env: None,
+            extra_body: Map::new(),
         }
     }
 }
@@ -149,6 +155,20 @@ impl ModelConfig {
                     .and_then(|name| env::var(name).ok())
                     .filter(|value| !value.is_empty())
             })
+    }
+
+    pub fn validate_extra_body(&self) -> Result<()> {
+        if let Some(key) = self
+            .extra_body
+            .keys()
+            .find(|key| RESERVED_CHAT_COMPLETION_BODY_KEYS.contains(&key.as_str()))
+        {
+            anyhow::bail!(
+                "model.extra_body must not override reserved chat-completion field {key:?}"
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -280,6 +300,7 @@ mod tests {
         assert_eq!(config.model.url, "http://127.0.0.1:11434/v1");
         assert_eq!(config.model.api_key, None);
         assert_eq!(config.model.api_key_env, None);
+        assert!(config.model.extra_body.is_empty());
     }
 
     #[test]
@@ -320,6 +341,39 @@ mod tests {
         let mut config = Config::default();
         config.model.timeout_seconds = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_reserved_model_extra_body_key() {
+        let mut config = Config::default();
+        config.model.extra_body.insert(
+            "messages".to_string(),
+            Value::String("not allowed".to_string()),
+        );
+
+        let error = config.validate().expect_err("config should be rejected");
+        assert!(error
+            .to_string()
+            .contains("model.extra_body must not override reserved chat-completion field"));
+    }
+
+    #[test]
+    fn parses_model_extra_body_table() {
+        let config: Config = toml::from_str(
+            r#"
+                [model]
+                model = "llama"
+
+                [model.extra_body]
+                thinking_budget_tokens = 1024
+            "#,
+        )
+        .expect("config should parse");
+
+        assert_eq!(
+            config.model.extra_body.get("thinking_budget_tokens"),
+            Some(&Value::from(1024))
+        );
     }
 
     #[test]

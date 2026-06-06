@@ -1,12 +1,12 @@
 use crate::audio::{encode_wav_bytes, AudioPayload};
-use crate::config::ModelConfig;
+use crate::config::{ModelConfig, RESERVED_CHAT_COMPLETION_BODY_KEYS};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -57,7 +57,7 @@ impl HttpDictationClient {
             temperature: Some(0.0),
         };
 
-        let request_body = serde_json::to_vec(&body)?;
+        let request_body = build_request_body(&body, &self.model_config.extra_body)?;
         let response = send_http_request(
             &self.endpoint,
             &request_body,
@@ -162,6 +162,34 @@ struct ChatChoice {
 #[derive(Debug, Deserialize)]
 struct ChatMessageResponse {
     content: Option<Value>,
+}
+
+fn build_request_body(
+    body: &ChatCompletionRequest,
+    extra_body: &Map<String, Value>,
+) -> Result<Vec<u8>> {
+    let mut request_body = serde_json::to_value(body)?
+        .as_object()
+        .cloned()
+        .context("chat completion request body must serialize as a JSON object")?;
+    merge_extra_body(&mut request_body, extra_body)?;
+    serde_json::to_vec(&request_body).context("failed to serialize chat completion request body")
+}
+
+fn merge_extra_body(
+    request_body: &mut Map<String, Value>,
+    extra_body: &Map<String, Value>,
+) -> Result<()> {
+    for (key, value) in extra_body {
+        if RESERVED_CHAT_COMPLETION_BODY_KEYS.contains(&key.as_str()) {
+            anyhow::bail!(
+                "model.extra_body must not override reserved chat-completion field {key:?}"
+            );
+        }
+        request_body.insert(key.clone(), value.clone());
+    }
+
+    Ok(())
 }
 
 fn extract_text(response: &ChatCompletionResponse) -> Result<String> {
@@ -314,5 +342,45 @@ mod tests {
             chat_completions_endpoint("https://api.openai.com/v1"),
             "https://api.openai.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn request_body_merges_model_extra_body() {
+        let body = ChatCompletionRequest {
+            model: "llama".to_string(),
+            messages: vec![ChatMessage::system("prompt".to_string())],
+            temperature: Some(0.0),
+        };
+        let mut extra_body = Map::new();
+        extra_body.insert("thinking_budget_tokens".to_string(), Value::from(1024));
+
+        let request_body = build_request_body(&body, &extra_body).expect("request should build");
+        let request_json: Value =
+            serde_json::from_slice(&request_body).expect("request body should be valid json");
+
+        assert_eq!(
+            request_json.get("model"),
+            Some(&Value::String("llama".to_string()))
+        );
+        assert_eq!(
+            request_json.get("thinking_budget_tokens"),
+            Some(&Value::from(1024))
+        );
+    }
+
+    #[test]
+    fn request_body_rejects_reserved_model_extra_body_keys() {
+        let body = ChatCompletionRequest {
+            model: "llama".to_string(),
+            messages: vec![ChatMessage::system("prompt".to_string())],
+            temperature: Some(0.0),
+        };
+        let mut extra_body = Map::new();
+        extra_body.insert("messages".to_string(), Value::Array(Vec::new()));
+
+        let error = build_request_body(&body, &extra_body).expect_err("merge should fail");
+        assert!(error
+            .to_string()
+            .contains("model.extra_body must not override reserved chat-completion field"));
     }
 }

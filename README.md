@@ -198,6 +198,22 @@ url = "https://generativelanguage.googleapis.com/v1beta/openai"
 api_key_env = "GEMINI_API_KEY"
 ```
 
+Provider-specific request fields can be added under `model.extra_body`. These are
+merged into the top-level chat-completions JSON body after `ut` assembles its
+standard `model`, `messages`, and `temperature` fields. Reserved keys cannot be
+overridden.
+
+For example, with `llama-server`:
+
+```toml
+[model]
+model = "meta-llama/Llama-3.3-70B-Instruct"
+url = "http://127.0.0.1:8080/v1"
+
+[model.extra_body]
+thinking_budget_tokens = 1024
+```
+
 ## Paste Safety
 
 `ut` captures Sway context at:
